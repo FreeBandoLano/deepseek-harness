@@ -1,0 +1,31 @@
+# The dsh-tui-app bundle patch: an interactive terminal REPL directly over
+# dsh-base. Like dsh-headless it mounts no Host, HTTP server, Web runtime, or
+# browser plugin — the renderer is a session/event subscriber in this process.
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+# No module-reload HMR: a hot remount mid-render would desynchronize the
+# terminal's append-only transcript from the session log it mirrors.
+- id: hmr
+  disabled: true
+
+- id: tools
+  config:
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+- insert:
+    # Code Mode is a core execution capability, not a Web component.
+    - id: code-runtime
+      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+
+    - id: tui-startup
+      name: '@deepseek-ai/dsh-tui-app/startup'
+
+    - id: tui-runner
+      name: '@deepseek-ai/dsh-tui-app'
+      inject: [tuiStartup]
+      config:
+        resume: !!js ctx.tuiStartup.resume

@@ -27,6 +27,20 @@ describe('callConfigEquals', () => {
     expect(callConfigEquals({ ...base, stop: ['a'] }, { ...base, stop: ['b'] })).toBe(false)
     expect(callConfigEquals({ ...base, stop: ['a', 'b'] }, { ...base, stop: ['a', 'b'] })).toBe(true)
   })
+
+  it('compares a declared tool choice by value, including the named-function form', () => {
+    const base = { provider: 'p', model: 'm' }
+    expect(callConfigEquals({ ...base, toolChoice: 'required' }, base)).toBe(false)
+    expect(callConfigEquals({ ...base, toolChoice: 'required' }, { ...base, toolChoice: 'required' })).toBe(true)
+    expect(callConfigEquals({ ...base, toolChoice: 'required' }, { ...base, toolChoice: 'auto' })).toBe(false)
+    const named = { type: 'function', function: { name: 'run_ghdl' } } as const
+    expect(callConfigEquals({ ...base, toolChoice: named }, { ...base, toolChoice: 'required' })).toBe(false)
+    expect(callConfigEquals({ ...base, toolChoice: named }, { ...base, toolChoice: named })).toBe(true)
+    expect(callConfigEquals(
+      { ...base, toolChoice: named },
+      { ...base, toolChoice: { type: 'function', function: { name: 'run_other' } } },
+    )).toBe(false)
+  })
 })
 
 describe('deepFreeze', () => {

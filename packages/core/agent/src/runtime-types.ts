@@ -7,7 +7,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Scoped } from '@deepseek-ai/dsh-scope'
-import type { LlmCallConfig, LlmFailure, ResolvedRetryPolicy } from '@deepseek-ai/dsh-llm'
+import type { LlmCallConfig, LlmFailure, ResolvedRetryPolicy, ToolChoice } from '@deepseek-ai/dsh-llm'
 import type { AgentCancelCause, Session, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 export type { AgentCancelCause } from '@deepseek-ai/dsh-session'
 import type { Inbox } from './inbox.ts'
@@ -28,6 +28,13 @@ export interface AgentOptions {
   model?: string
   /** Maximum output tokens for each conversation-model request. */
   maxTokens?: number
+  /**
+   * Tool this agent's conversation requests must call, or must not call
+   * ({@link ToolChoice}). Declaring it compels the agent rather than asking it:
+   * the requirement reaches every request the agent builds, and a resume reads
+   * it back from the session's logged request header.
+   */
+  toolChoice?: ToolChoice
 }
 
 /** Options for {@link Agent.cancel}. */

@@ -514,6 +514,12 @@ interface GenerateOptions {
   system?: string
   /** Tool schemas (adapters map to the provider's `tools` field). */
   tools?: ToolSchema[]
+  /**
+   * Tool the model must call, or must not call, on this request. Omitted means
+   * the provider's own default. Only a conversation request carries it: an
+   * auxiliary call (compaction, session title) is never compelled.
+   */
+  toolChoice?: ToolChoice
   temperature?: number
   maxTokens?: number
   /**
@@ -574,6 +580,23 @@ interface ToolSchema {
 ```
 
 The model-facing `ToolSchema` is the wire type; the registered `ToolDefinition` that produces it (schema + `execute`) is on [tools.md](tools.md).
+
+A request can also compel a call rather than merely offer one. `ToolChoice` speaks the OpenAI-compatible completions vocabulary, so an adapter that carries the field forwards it verbatim:
+
+```ts type-equiv
+/**
+ * Which tool, if any, a model must call on this request, in the
+ * OpenAI-compatible completions vocabulary. The three string values and the
+ * named-function form are the protocol's own, so an adapter that carries the
+ * field forwards it verbatim rather than translating it — and naming one
+ * function later needs no second option.
+ */
+type ToolChoice =
+  | 'none'
+  | 'auto'
+  | 'required'
+  | { readonly type: 'function'; readonly function: { readonly name: string } }
+```
 
 A provider a surface is still drafting has no route and no catalog, so interrogation is described separately: the request carries the draft the user is editing, and the reply is candidates a surface may adopt rather than a catalog it must serve.
 
@@ -636,10 +659,10 @@ FIXME(call-config-shape): revisit which remaining fields are genuinely epoch-lev
 
 ```ts type-equiv
 /**
- * Provider, model, reasoning effort, and sampling scalars of one conversation's
- * requests. Every field maps 1:1 onto the same-named `GenerateOptions` field;
- * the loop builds requests from the logged header rather than accepting these
- * per call.
+ * Provider, model, reasoning effort, sampling scalars, and any declared tool
+ * choice of one conversation's requests. Every field maps 1:1 onto the
+ * same-named `GenerateOptions` field; the loop builds requests from the logged
+ * header rather than accepting these per call.
  */
 interface LlmCallConfig {
   provider: string
@@ -648,6 +671,13 @@ interface LlmCallConfig {
   temperature?: number
   maxTokens?: number
   stop?: string[]
+  /**
+   * Declared tool choice. It is request-header state because it changes the
+   * request: a resumed session rebuilds its requests from the logged header,
+   * so a requirement held anywhere else would be dropped without the log
+   * showing a change.
+   */
+  toolChoice?: ToolChoice
 }
 ```
 

@@ -138,6 +138,39 @@ describe('PiAiAdapter provider routing', () => {
     })
   })
 
+  it('carries a declared tool choice onto the request body beside the mapped reasoning effort', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, { reasoning: 'max' })
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      tools: [{ name: 'run_ghdl', description: 'analyze, elaborate, and run a testbench', parameters: { type: 'object' } }],
+      toolChoice: 'required',
+    })
+    expect(server.requests[0]).toMatchObject({
+      tool_choice: 'required',
+      // The simple stream entry is the one that maps the Harness reasoning level
+      // onto the protocol's effort; carrying a tool choice must reach the body
+      // through that same call rather than by moving to the full entry.
+      reasoning_effort: 'max',
+    })
+  })
+
+  it('omits the tool choice from the request body when none is declared', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, { reasoning: 'max' })
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      tools: [{ name: 'run_ghdl', description: 'analyze, elaborate, and run a testbench', parameters: { type: 'object' } }],
+    })
+    const body = server.requests[0] as { tools?: unknown[]; tool_choice?: unknown }
+    // The tool list proves the control is not vacuous: the protocol could have
+    // carried a tool choice here and did not.
+    expect(body.tools).toHaveLength(1)
+    expect(body.tool_choice).toBeUndefined()
+  })
+
   it('uses a dynamic request effort and reports unsupported efforts before network I/O', async () => {
     const server = await mockServer([{ events: textEvents }, { events: textEvents }])
     const ctx = await harness(server.url, { reasoning: 'max' })

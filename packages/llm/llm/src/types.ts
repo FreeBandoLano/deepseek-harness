@@ -337,6 +337,19 @@ export interface ToolSchema {
   parameters: Record<string, unknown>
 }
 
+/**
+ * Which tool, if any, a model must call on this request, in the
+ * OpenAI-compatible completions vocabulary. The three string values and the
+ * named-function form are the protocol's own, so an adapter that carries the
+ * field forwards it verbatim rather than translating it — and naming one
+ * function later needs no second option.
+ */
+export type ToolChoice =
+  | 'none'
+  | 'auto'
+  | 'required'
+  | { readonly type: 'function'; readonly function: { readonly name: string } }
+
 /** A single model request, fully assembled. */
 export interface GenerateOptions {
   /** Registered provider route selecting the adapter instance. */
@@ -354,6 +367,12 @@ export interface GenerateOptions {
   system?: string
   /** Tool schemas (adapters map to the provider's `tools` field). */
   tools?: ToolSchema[]
+  /**
+   * Tool the model must call, or must not call, on this request. Omitted means
+   * the provider's own default. Only a conversation request carries it: an
+   * auxiliary call (compaction, session title) is never compelled.
+   */
+  toolChoice?: ToolChoice
   temperature?: number
   maxTokens?: number
   /**

@@ -70,4 +70,31 @@ describe('all-messages LLM title provider', () => {
       messageSeqs: [inherited.seq, latest.seq],
     })
   })
+
+  it('never compels the title call, even on a route that declares a tool choice', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionTitleService, TITLE_CONFIG)
+    const adapter = new RecordingAdapter()
+    ctx.llm.registerAdapter(['current-route'], adapter)
+    await ctx.plugin(providerPlugin, LLM_CONFIG)
+    const session = ctx.sessions.create(SessionId('compelled-route'))
+    session.append('turn/start', { turn: 1 })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'name this session' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    await settle()
+    session.append('request/header', {
+      header: { config: { provider: 'current-route', model: 'current-model', toolChoice: 'required' } },
+      reason: 'initial',
+    })
+    await settle()
+
+    // The route is inherited; the requirement is not. A title call is not the
+    // agent's own conversation turn and is never compelled.
+    expect(adapter.requests[0]).toMatchObject({ provider: 'current-route', model: 'current-model' })
+    expect(adapter.requests[0]?.toolChoice).toBeUndefined()
+    expect(ctx.sessionTitle.get(session)?.title).toBe('All messages model title')
+  })
 })

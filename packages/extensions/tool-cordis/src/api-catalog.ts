@@ -2863,7 +2863,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'AgentOptions',
-    declaration: 'export interface AgentOptions {\n    provider?: string;\n    model?: string;\n    maxTokens?: number;\n}',
+    declaration: 'export interface AgentOptions {\n    provider?: string;\n    model?: string;\n    maxTokens?: number;\n    toolChoice?: ToolChoice;\n}',
   },
   {
     name: 'AgentPreset',
@@ -3403,7 +3403,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GenerateOptions',
-    declaration: 'export interface GenerateOptions {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: Message[];\n    system?: string;\n    tools?: ToolSchema[];\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    purpose?: \'compaction\' | \'session-title\';\n}',
+    declaration: 'export interface GenerateOptions {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: Message[];\n    system?: string;\n    tools?: ToolSchema[];\n    toolChoice?: ToolChoice;\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    purpose?: \'compaction\' | \'session-title\';\n}',
   },
   {
     name: 'GenericCallView',
@@ -3599,7 +3599,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmCallConfig',
-    declaration: 'export interface LlmCallConfig {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n}',
+    declaration: 'export interface LlmCallConfig {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    toolChoice?: ToolChoice;\n}',
   },
   {
     name: 'LlmCallConfigAdapterDefaults',
@@ -4752,6 +4752,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ToolCallView',
     declaration: 'export type ToolCallView = GenericCallView | TerminalCallView | DiffCallView;',
+  },
+  {
+    name: 'ToolChoice',
+    declaration: 'export type ToolChoice = \'none\' | \'auto\' | \'required\' | {\n    readonly type: \'function\';\n    readonly function: {\n        readonly name: string;\n    };\n};',
   },
   {
     name: 'ToolDefinition',

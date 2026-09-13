@@ -534,6 +534,65 @@ describe('request stability across the loop', () => {
     expectPrefixExtension(adapter.requests[0]!, adapter2.requests[0]!)
   })
 
+  it('logs a declared tool choice in the request header and rebuilds it from the log on resume', async () => {
+    const adapter = new MockAdapter([textResponse('one')])
+    const ctx = await harness(adapter)
+    const agent = ctx.agentLoop.create(SessionId('compelled-gen1'), {
+      provider: 'mock',
+      model: 'mock',
+      toolChoice: 'required',
+    })
+    send(agent, 'first')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests[0]!.toolChoice).toBe('required')
+    const logged = agent.session.events.filter(e => e.type === 'request/header')
+    expect(logged).toHaveLength(1)
+    expect(logged[0]!.data.header.config.toolChoice).toBe('required')
+
+    // Second generation: a fresh loop over the seeded log that declares no
+    // requirement of its own. The rebuilt request must still be compelled, and
+    // the anchor must be a resume snapshot rather than a changed header.
+    const adapter2 = new MockAdapter([textResponse('two')])
+    const ctx2 = await harness(adapter2)
+    const handle = await ctx2.agents.create({
+      sessionId: SessionId('compelled-gen2'),
+      seed: [...agent.session.events],
+      agentOptions: { provider: 'mock', model: 'mock' },
+    })
+    send(handle.agent, 'second')
+    await waitForIdle(ctx2, handle.agent)
+
+    expect(adapter2.requests[0]!.toolChoice).toBe('required')
+    const resumed = handle.agent.session.events.filter(e => e.type === 'request/header')
+    expect(resumed.map(e => e.data.reason)).toEqual(['initial', 'resume'])
+    expect(resumed[1]!.data.header.config.toolChoice).toBe('required')
+  })
+
+  it('a changed tool choice is a logged header change, not a silent substitution', async () => {
+    const adapter = new MockAdapter([textResponse('one'), textResponse('two')])
+    const ctx = await harness(adapter)
+    const agent = ctx.agentLoop.create(SessionId('compelled-change'), {
+      provider: 'mock',
+      model: 'mock',
+      toolChoice: 'required',
+    })
+    send(agent, 'first')
+    await waitForIdle(ctx, agent)
+
+    ctx.on('agent/request', async (_payload, next) => ({
+      ...await next(),
+      toolChoice: 'auto' as const,
+    }))
+    send(agent, 'second')
+    await waitForIdle(ctx, agent)
+
+    expect(adapter.requests.map(request => request.toolChoice)).toEqual(['required', 'auto'])
+    const headers = agent.session.events.filter(e => e.type === 'request/header')
+    expect(headers.map(e => e.data.reason)).toEqual(['initial', 'change'])
+    expect(headers[1]!.data.header.config.toolChoice).toBe('auto')
+  })
+
   it('a delegating listener cannot mutate the seed through next() — the fold stays log-true', async () => {
     const adapter = new MockAdapter([textResponse('one'), textResponse('two')])
     const ctx = await harness(adapter)
@@ -571,7 +630,11 @@ describe('request stability across the loop', () => {
     ])
     const ctx = await harness(adapter)
     registerEcho(ctx)
-    const agent = ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+    const agent = ctx.agentLoop.create(SessionId('a1'), {
+      provider: 'mock',
+      model: 'mock',
+      toolChoice: 'required',
+    })
 
     send(agent, 'go')
     await waitForIdle(ctx, agent)
@@ -609,6 +672,7 @@ describe('request stability across the loop', () => {
       expect(request.temperature).toBe(header.config.temperature)
       expect(request.maxTokens).toBe(header.config.maxTokens)
       expect(request.stop).toEqual(header.config.stop)
+      expect(request.toolChoice).toBe(header.config.toolChoice)
     })
   })
 })

@@ -438,12 +438,20 @@ export class ReactLoopAgent implements Agent {
     const persistedHeader = session.requestHeader()
     const persistedConfig = persistedHeader?.config
     const route = { provider: this.options.provider ?? '', model: this.options.model ?? '' }
-    const reasoningEffort = persistedConfig?.provider === route.provider
+    const sameRoute = persistedConfig?.provider === route.provider
       && persistedConfig.model === route.model
+    const reasoningEffort = sameRoute
       && persistedHeader?.adapterDefaults?.reasoningEffort !== true
       ? persistedConfig.reasoningEffort
       : undefined
     const maxTokens = this.options.maxTokens
+    // A declared requirement wins where it is present; otherwise the logged
+    // header's own requirement is restored, so a fresh loop over a seeded log
+    // rebuilds the compelled request it logged rather than quietly dropping the
+    // demand. A route the log does not agree with drops it, and the changed
+    // header is logged like any other real change.
+    const toolChoice = this.options.toolChoice
+      ?? (sameRoute ? persistedConfig?.toolChoice : undefined)
     const seedConfig = deepFreeze(structuredClone(
       this.requestHeaderLogged
         // oxlint-disable-next-line typescript/no-non-null-assertion -- the instance logged the header it now folds
@@ -452,6 +460,7 @@ export class ReactLoopAgent implements Agent {
           ...route,
           ...reasoningEffort === undefined ? {} : { reasoningEffort },
           ...maxTokens === undefined ? {} : { maxTokens },
+          ...toolChoice === undefined ? {} : { toolChoice },
         },
     ))
     const proposedConfig = await this.dispatch.waterfall(

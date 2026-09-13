@@ -35,6 +35,7 @@ import type {
   Models,
   ModelThinkingLevel,
   MutableModels,
+  ModelsSimpleStreamOptions,
   SimpleStreamOptions,
   ThinkingLevel,
 } from '@earendil-works/pi-ai'
@@ -54,6 +55,7 @@ import type {
   ReasoningEffortId as ReasoningEffortIdType,
   ResolvedRetryPolicy,
   StreamChunk,
+  ToolChoice,
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
@@ -107,6 +109,18 @@ export interface PiAiAuthInjection {
   /** Ambient lookups a provider performs while resolving its own auth. */
   authContext: AuthContext
 }
+
+/**
+ * pi-ai's simple-stream options plus the tool choice that entry actually reads.
+ *
+ * `streamSimple` forwards `options.toolChoice` into `stream`, which declares
+ * the field and writes it to the request body, but the simple entry's own
+ * declared options omit it. The adapter calls the simple entry deliberately —
+ * it is the entry that maps the Harness reasoning level onto the protocol's
+ * effort — so the option is named here and pinned by the adapter spec's
+ * assertion on the captured request body rather than by swapping entries.
+ */
+type SimpleStreamOptionsWithToolChoice = ModelsSimpleStreamOptions & { toolChoice?: ToolChoice }
 
 /** Copy profile stream knobs into pi-ai's common option vocabulary. */
 function profileOptions(
@@ -364,16 +378,18 @@ export class PiAiAdapter extends LlmAdapter {
           maxPixels: profile.requestImagePixelBudget,
           maxBytes: profile.requestImageMaxBytes,
         })
-      const events = snapshot.models.streamSimple(model, context, {
+      const streamOptions: SimpleStreamOptionsWithToolChoice = {
         ...profileOptions(profile, reasoning, apiKey),
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
+        ...options.toolChoice === undefined ? {} : { toolChoice: options.toolChoice },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
         signal: watchdog.signal,
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
         headers: requestHeaders(profile.headers),
-      })
+      }
+      const events = snapshot.models.streamSimple(model, context, streamOptions)
       const iterator = toStreamChunks(events, model.contextWindow)[Symbol.asyncIterator]()
       let exhausted = false
       try {

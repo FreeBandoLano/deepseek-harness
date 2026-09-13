@@ -167,10 +167,17 @@ interface AgentOptions {
   model?: string
   /** Maximum output tokens for each conversation-model request. */
   maxTokens?: number
+  /**
+   * Tool this agent's conversation requests must call, or must not call
+   * ({@link ToolChoice}). Declaring it compels the agent rather than asking it:
+   * the requirement reaches every request the agent builds, and a resume reads
+   * it back from the session's logged request header.
+   */
+  toolChoice?: ToolChoice
 }
 ```
 
-在 `agent/request` 之后，分发要求 `provider` 与 `model` 都存在。提供 `maxTokens` 时，它必须是正安全整数，并限制每次对话模型请求的输出；省略时，系统会在写入请求 header 前填入确切模型的适配器默认值，否则提供方行为保持不变。agent 作用域的 `deployment:persona` 提示词段落可以遮蔽全局默认 persona。
+在 `agent/request` 之后，分发要求 `provider` 与 `model` 都存在。提供 `maxTokens` 时，它必须是正安全整数，并限制每次对话模型请求的输出；省略时，系统会在写入请求 header 前填入确切模型的适配器默认值，否则提供方行为保持不变。声明的 `toolChoice` 与其他请求 header 事实并列：它随 header 一同写入日志，并从中恢复，因此恢复的会话重建的是同一个被强制的请求，而不是一个更弱的请求。agent 作用域的 `deployment:persona` 提示词段落可以遮蔽全局默认 persona。
 
 inbox 即投递词汇——agent 以持久投影形式拥有的两条有序待处理消息列表：
 

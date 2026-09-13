@@ -4,7 +4,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { isAgentLoopRequest, type GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { isAgentLoopRequest, toolChoiceEquals, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 import { foldRequestHeader } from '@deepseek-ai/dsh-session'
 
@@ -46,6 +46,7 @@ const install: InvariantInstaller = Object.assign((ctx: Context, fail: Invariant
       && options.temperature === header.config.temperature
       && options.maxTokens === header.config.maxTokens
       && JSON.stringify(options.stop) === JSON.stringify(header.config.stop)
+      && toolChoiceEquals(options.toolChoice, header.config.toolChoice)
       && JSON.stringify(options.tools ?? []) === JSON.stringify(header.tools ?? [])
     if (!headerMatches) {
       fail(`llm request for session "${String(session.id)}" diverges from the folded request header`)

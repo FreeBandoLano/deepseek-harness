@@ -1312,6 +1312,20 @@ describe('default one-shot summarizer', () => {
     expect(adapter.lastOptions?.model).toBe('routed')
   })
 
+  it('never compels a summarization call, even on a route that declares a tool choice', async () => {
+    const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'summary' }], undefined, 'routed')
+    const session = conversation(1)
+    session.append('request/header', {
+      header: { config: { provider: 'routed', model: 'routed', toolChoice: 'required' } },
+      reason: 'initial',
+    })
+    await compact.runSummarize(promptInput('history'), agent(session, 'fallback'))
+    // The route is inherited; the requirement is not. A summarization call is
+    // not the agent's own conversation turn and is never compelled.
+    expect(adapter.lastOptions?.provider).toBe('routed')
+    expect(adapter.lastOptions?.toolChoice).toBeUndefined()
+  })
+
   it('records the model actually dispatched after one-shot stream routing', async () => {
     const { ctx, compact } = await summarizerHarness([{ type: 'text', text: 'unused' }])
     const routedAdapter = new ScriptedAdapter([{ type: 'text', text: 'routed summary' }])

@@ -75,6 +75,32 @@ describe('request-reconstruction invariant', () => {
       .toThrow(/diverges from the folded request header/)
   })
 
+  it('rejects a request whose tool choice diverges from the folded header', async () => {
+    const ctx = await setup()
+    const session = ctx.sessions.create(SessionId('req-tool-choice'))
+    session.append('turn/start', { turn: 1 })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    const boundary = session.deriveMessages()
+    session.append('step/start', { turn: 1, step: 1 })
+    session.append('request/header', {
+      header: { config: { provider: 'mock', model: 'm', toolChoice: 'required' } },
+      reason: 'initial',
+    })
+
+    expect(() => {
+      dispatch(ctx, loopRequest({
+        model: 'm', messages: Object.freeze(boundary), sessionId: session.id, toolChoice: 'required',
+      }))
+    }).not.toThrow()
+    expect(() => {
+      dispatch(ctx, loopRequest({
+        model: 'm', messages: Object.freeze(boundary), sessionId: session.id, toolChoice: 'auto',
+      }))
+    }).toThrow(/diverges from the folded request header/)
+  })
+
   it('rejects loop requests with no boundary or header', async () => {
     const ctx = await setup()
     const session = ctx.sessions.create(SessionId('req-bare'))

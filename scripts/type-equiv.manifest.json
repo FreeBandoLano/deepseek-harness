@@ -103,6 +103,11 @@
     },
     {
       "doc": "docs/subsystems/llm-streaming.md",
+      "symbol": "ToolChoice",
+      "source": "packages/llm/llm/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/llm-streaming.md",
       "symbol": "LlmCallConfig",
       "source": "packages/llm/llm/src/call-config.ts"
     },

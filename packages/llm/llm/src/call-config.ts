@@ -6,7 +6,7 @@
  * @module dsh-llm/call-config
  */
 
-import type { GenerateOptions } from './types.ts'
+import type { GenerateOptions, ToolChoice } from './types.ts'
 import type { ReasoningEffortId } from './brand.ts'
 
 /** Process-local identities of request objects assembled by dsh-agent-loop. */
@@ -15,10 +15,10 @@ const AGENT_LOOP_REQUESTS = new WeakSet<GenerateOptions>()
 // TODO(call-config-shape): Revisit which fields are epoch-level for cache reuse
 // and where provider-specific request options belong.
 /**
- * Provider, model, reasoning effort, and sampling scalars of one conversation's
- * requests. Every field maps 1:1 onto the same-named `GenerateOptions` field;
- * the loop builds requests from the logged header rather than accepting these
- * per call.
+ * Provider, model, reasoning effort, sampling scalars, and any declared tool
+ * choice of one conversation's requests. Every field maps 1:1 onto the
+ * same-named `GenerateOptions` field; the loop builds requests from the logged
+ * header rather than accepting these per call.
  */
 export interface LlmCallConfig {
   provider: string
@@ -27,6 +27,13 @@ export interface LlmCallConfig {
   temperature?: number
   maxTokens?: number
   stop?: string[]
+  /**
+   * Declared tool choice. It is request-header state because it changes the
+   * request: a resumed session rebuilds its requests from the logged header,
+   * so a requirement held anywhere else would be dropped without the log
+   * showing a change.
+   */
+  toolChoice?: ToolChoice
 }
 
 /**
@@ -36,6 +43,22 @@ export interface LlmCallConfig {
 export interface LlmCallConfigAdapterDefaults {
   reasoningEffort?: true
   maxTokens?: true
+}
+
+/**
+ * Field-wise equality over one declared tool choice, string forms and the
+ * named-function form alike. Exported because the loop's request-reconstruction
+ * invariant compares the same field against the folded header: two value
+ * comparisons of one union would drift apart, and a JSON round-trip would make
+ * the named-function form sensitive to key order.
+ * @param a - one tool choice, or none.
+ * @param b - the other, or none.
+ * @returns whether both name the same choice.
+ */
+export function toolChoiceEquals(a: ToolChoice | undefined, b: ToolChoice | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  if (typeof a === 'string' || typeof b === 'string') return a === b
+  return a.type === b.type && a.function.name === b.function.name
 }
 
 /**
@@ -53,6 +76,7 @@ export function callConfigEquals(a: LlmCallConfig, b: LlmCallConfig): boolean {
     || a.reasoningEffort !== b.reasoningEffort
     || a.temperature !== b.temperature
     || a.maxTokens !== b.maxTokens
+    || !toolChoiceEquals(a.toolChoice, b.toolChoice)
   ) return false
   if (a.stop === undefined || b.stop === undefined) return a.stop === b.stop
   return a.stop.length === b.stop.length && a.stop.every((s, i) => s === b.stop?.[i])

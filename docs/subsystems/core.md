@@ -163,10 +163,17 @@ interface AgentOptions {
   model?: string
   /** Maximum output tokens for each conversation-model request. */
   maxTokens?: number
+  /**
+   * Tool this agent's conversation requests must call, or must not call
+   * ({@link ToolChoice}). Declaring it compels the agent rather than asking it:
+   * the requirement reaches every request the agent builds, and a resume reads
+   * it back from the session's logged request header.
+   */
+  toolChoice?: ToolChoice
 }
 ```
 
-Dispatch requires `provider` and `model` after `agent/request`. When present, `maxTokens` must be a positive safe integer and caps every conversation-model request; omission allows the exact-model adapter default to materialize before the request header, or otherwise leaves provider behavior unchanged. An agent-scoped `deployment:persona` prompt section may shadow the global default persona.
+Dispatch requires `provider` and `model` after `agent/request`. When present, `maxTokens` must be a positive safe integer and caps every conversation-model request; omission allows the exact-model adapter default to materialize before the request header, or otherwise leaves provider behavior unchanged. A declared `toolChoice` joins those request-header facts: it is logged with the header and restored from it, so a resumed session rebuilds the same compelled request instead of a weaker one. An agent-scoped `deployment:persona` prompt section may shadow the global default persona.
 
 The inbox is the delivery vocabulary — two ordered pending-message lists the agent owns as a durable projection:
 

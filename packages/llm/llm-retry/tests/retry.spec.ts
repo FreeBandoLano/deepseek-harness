@@ -98,6 +98,26 @@ function emptyCompletion(): StreamChunk[] {
   ]
 }
 
+/**
+ * A terminal failure from a request that required a tool call and got prose
+ * instead — the response half of a compelled turn.
+ */
+function unmetToolChoiceCompletion(): StreamChunk[] {
+  return [
+    { type: 'usage', usage: { inputTokens: 1, outputTokens: 2 } },
+    {
+      type: 'finish',
+      reason: {
+        kind: 'error',
+        failure: {
+          message: 'model "mock" answered without calling a tool, which this request required',
+          code: 'TOOL_CHOICE_UNMET',
+        },
+      },
+    },
+  ]
+}
+
 async function harness(
   adapter: ScriptedAdapter,
   policies: Readonly<Record<string, RetryPolicyConfig | undefined>> = { mock: normalConfig() },
@@ -255,6 +275,30 @@ describe('provider-routed retry policy', () => {
     expect(agent.session.deriveMessages().at(-1)).toMatchObject({
       role: 'assistant',
       content: [{ type: 'text', text: 'recovered' }],
+    })
+  })
+
+  it('does not retry a TOOL_CHOICE_UNMET error finish, which the default retryable codes exclude', async () => {
+    vi.useFakeTimers()
+    const adapter = new ScriptedAdapter([
+      unmetToolChoiceCompletion(),
+      textResponse('must never be requested'),
+    ])
+    // No retryableCodes override: repeating this request would ask a model that
+    // just ignored the requirement to ignore it again, so the default policy
+    // must leave it terminal for the step.
+    ;({ ctx: context } = await harness(adapter))
+    const agent = context.agentLoop.create(SessionId('no-retry-tool-choice'), { provider: 'mock', model: 'mock' })
+    const idle = waitForIdle(context, agent)
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await vi.advanceTimersByTimeAsync(30_000)
+    await idle
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.events.filter(event => event.type === 'llm/retry')).toEqual([])
+    expect(agent.session.events.filter(event => event.type === 'turn/end').at(-1)?.data).toMatchObject({
+      reason: { kind: 'error', error: { code: 'TOOL_CHOICE_UNMET' } },
     })
   })
 

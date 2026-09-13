@@ -24,6 +24,30 @@ afterEach(async () => {
   await closeMockServers()
 })
 
+/** A completion the output cap cut off mid-answer (`finish_reason: "length"`). */
+const cappedTextEvents = [
+  '{"choices":[{"delta":{"role":"assistant","content":""},"index":0,"finish_reason":null}]}',
+  '{"choices":[{"delta":{"content":"the answer is"},"index":0,"finish_reason":null}]}',
+  '{"choices":[{"delta":{},"index":0,"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":16}}',
+  '[DONE]',
+]
+
+/** One text block, then a completed call to `run_ghdl`. */
+const calledToolEvents = [
+  '{"choices":[{"delta":{"role":"assistant","content":""},"index":0,"finish_reason":null}]}',
+  '{"choices":[{"delta":{"content":"running it"},"index":0,"finish_reason":null}]}',
+  '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"run_ghdl","arguments":"{}"}}]},"index":0,"finish_reason":null}]}',
+  '{"choices":[{"delta":{},"index":0,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":6}}',
+  '[DONE]',
+]
+
+/** A completion that stops with nothing at all, not even prose. */
+const silentTextEvents = [
+  '{"choices":[{"delta":{"role":"assistant","content":""},"index":0,"finish_reason":null}]}',
+  '{"choices":[{"delta":{},"index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":0}}',
+  '[DONE]',
+]
+
 const IMAGE_REF: ImageAttachmentRef = {
   attachmentId: AttachmentId(`sha256:${'a'.repeat(64)}`),
   mediaType: 'image/png',
@@ -169,6 +193,81 @@ describe('PiAiAdapter provider routing', () => {
     // carried a tool choice here and did not.
     expect(body.tools).toHaveLength(1)
     expect(body.tool_choice).toBeUndefined()
+  })
+
+  it('fails a compelled turn whose completion answers in prose instead of calling the tool', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url)
+    const result = await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      tools: [{ name: 'run_ghdl', description: 'analyze, elaborate, and run a testbench', parameters: { type: 'object' } }],
+      toolChoice: { type: 'function', function: { name: 'run_ghdl' } },
+    })
+    expect(result.finish.kind).toBe('error')
+    const failure = result.finish.kind === 'error' ? result.finish.failure : undefined
+    expect(failure?.code).toBe('TOOL_CHOICE_UNMET')
+    // The failure names the call the model owed, so an operator reading it does
+    // not have to infer which requirement was ignored.
+    expect(failure?.message).toContain('run_ghdl')
+  })
+
+  it('completes the same scripted prose answer when no tool choice was required', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url)
+    const result = await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      tools: [{ name: 'run_ghdl', description: 'analyze, elaborate, and run a testbench', parameters: { type: 'object' } }],
+    })
+    expect(result.finish).toEqual({ kind: 'stop' })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+  })
+
+  it('reports a compelled turn cut off by the output cap as running out of room', async () => {
+    const server = await mockServer([{ events: cappedTextEvents }])
+    const ctx = await harness(server.url)
+    const result = await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      tools: [{ name: 'run_ghdl', description: 'analyze, elaborate, and run a testbench', parameters: { type: 'object' } }],
+      toolChoice: 'required',
+      maxTokens: 16,
+    })
+    // A response the cap cut off never reached the call, which is a different
+    // fact from a model that answered anyway: reporting it as an unmet
+    // requirement would make a compellable reasoning model look un-compellable.
+    expect(result.finish).toEqual({ kind: 'max-tokens' })
+  })
+
+  it('leaves a compelled turn alone when the model does call the tool', async () => {
+    const server = await mockServer([{ events: calledToolEvents }])
+    const ctx = await harness(server.url)
+    const result = await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      tools: [{ name: 'run_ghdl', description: 'analyze, elaborate, and run a testbench', parameters: { type: 'object' } }],
+      toolChoice: 'required',
+    })
+    expect(result.finish).toEqual({ kind: 'tool-calls' })
+    expect(result.message.content).toMatchObject([
+      { type: 'text', text: 'running it' },
+      { type: 'tool-call', name: 'run_ghdl' },
+    ])
+  })
+
+  it('keeps a compelled completion that produced nothing at all as the empty-response failure', async () => {
+    const server = await mockServer([{ events: silentTextEvents }])
+    const ctx = await harness(server.url)
+    const result = await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      tools: [{ name: 'run_ghdl', description: 'analyze, elaborate, and run a testbench', parameters: { type: 'object' } }],
+      toolChoice: 'required',
+    })
+    // The neighbouring failure the converter already draws keeps its identity:
+    // a degenerate empty completion is not an ignored requirement.
+    expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'EMPTY_RESPONSE' } })
   })
 
   it('uses a dynamic request effort and reports unsupported efforts before network I/O', async () => {

@@ -102,4 +102,29 @@ describe('subagent tool row tool choice', () => {
     expect(body.tools?.length).toBeGreaterThan(0)
     expect(body.tool_choice).toBeUndefined()
   })
+
+  it('reports the ignored requirement to the delegating agent instead of a prose success', async () => {
+    const { ctx, parent } = await wire({
+      provider: 'local',
+      model: LOCAL_MODEL,
+      toolChoice: 'required',
+    })
+
+    const result = await delegate(ctx, parent, 'compelled prose answer')
+
+    expect(result.isError).toBe(true)
+    const reported = result.content.filter(b => b.type === 'text').map(b => b.text).join('')
+    expect(reported).toMatch(/without calling/)
+    expect(reported).toMatch(/required/)
+  })
+
+  it('returns the same prose answer unchanged when the row declares no tool choice', async () => {
+    const { ctx, parent } = await wire({ provider: 'local', model: LOCAL_MODEL })
+
+    const result = await delegate(ctx, parent, 'plain prose answer')
+
+    expect(result.isError).toBe(false)
+    const reported = result.content.filter(b => b.type === 'text').map(b => b.text).join('')
+    expect(reported).toContain('hello')
+  })
 })

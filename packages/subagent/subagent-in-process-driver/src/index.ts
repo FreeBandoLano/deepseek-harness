@@ -24,6 +24,7 @@ import {
   captureDelegatedPolicyOverrides,
   childSessionMeta,
   finalAssistantOutput,
+  limitSubagentDiagnostic,
   resolveChildAgentOptions,
   resolveChildDepth,
 } from '@deepseek-ai/dsh-subagent'
@@ -204,6 +205,21 @@ function drivePublishedRun(
   }
 }
 
+/**
+ * The child's terminal failure detail, phrased for the delegating agent.
+ *
+ * A failed turn carries the typed failure — code and message — that ended it,
+ * and the seam presents that separately from the child's partial output so the
+ * delegating agent can tell an ignored requirement from a truncated answer
+ * instead of reading both as "the run failed".
+ * @param reason - the child's terminal turn-end reason, when it recorded one.
+ * @returns the bounded diagnostic text, or undefined for a non-error reason.
+ */
+function resultDiagnostic(reason: TurnEndReason | undefined): string | undefined {
+  if (reason?.kind !== 'error') return undefined
+  return limitSubagentDiagnostic(`${reason.error.code}: ${reason.error.message}`)
+}
+
 /** Read one settled child's result from events after its activation boundary. */
 function readResult(
   child: Agent,
@@ -223,11 +239,13 @@ function readResult(
   // Disposal can tear the owner down before the loop records its ordinary
   // `aborted` end, yielding `disposed` instead.
   const stopReason: SubagentStopReason = cancelled && recorded !== 'completed' ? 'aborted' : recorded
+  const diagnostic = resultDiagnostic(cancelled ? undefined : lastEnd?.data.reason)
+  const detail = diagnostic === undefined ? {} : { diagnostic }
   if (structured !== undefined) {
     if (structured.captured !== undefined) {
-      return { output, structured: structured.captured.value, stopReason }
+      return { output, structured: structured.captured.value, ...detail, stopReason }
     }
-    if (stopReason === 'completed') return { output, stopReason: cancelled ? 'aborted' : 'error' }
+    if (stopReason === 'completed') return { output, ...detail, stopReason: cancelled ? 'aborted' : 'error' }
   }
-  return { output, stopReason }
+  return { output, ...detail, stopReason }
 }

@@ -390,7 +390,7 @@ export class PiAiAdapter extends LlmAdapter {
         headers: requestHeaders(profile.headers),
       }
       const events = snapshot.models.streamSimple(model, context, streamOptions)
-      const iterator = toStreamChunks(events, model.contextWindow)[Symbol.asyncIterator]()
+      const iterator = toStreamChunks(events, model.contextWindow, options.toolChoice)[Symbol.asyncIterator]()
       let exhausted = false
       try {
         while (true) {

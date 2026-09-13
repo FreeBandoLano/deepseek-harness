@@ -28,6 +28,17 @@ export const CONTEXT_WINDOW_EXCEEDED_CODE = 'CONTEXT_WINDOW_EXCEEDED'
 export const QUOTA_EXCEEDED_CODE = 'QUOTA'
 
 /**
+ * Canonical provider-neutral code for a response that ended in prose while the
+ * request required a tool call. A tool choice is a request, not a guarantee: a
+ * gateway may ignore it and a model may answer anyway, and such a response
+ * violates the requirement rather than answering it — the caller asked for a
+ * call and got text. Deliberately outside the default retryable set, because
+ * repeating an identical request asks a model that just ignored the requirement
+ * to ignore it again.
+ */
+export const TOOL_CHOICE_UNMET_CODE = 'TOOL_CHOICE_UNMET'
+
+/**
  * Canonical provider-neutral code for a response that completed normally but
  * carried no content blocks at all. Providers occasionally emit a degenerate
  * completion (a terminal stop with zero output); adapters classify it as this

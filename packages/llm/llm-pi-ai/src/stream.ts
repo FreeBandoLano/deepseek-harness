@@ -8,7 +8,8 @@
  * @module dsh-llm-pi-ai/stream
  */
 
-import { CallId, CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
+import { CallId, CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE, TOOL_CHOICE_UNMET_CODE } from '@deepseek-ai/dsh-llm'
+import type { ToolChoice } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { isContextOverflow } from '@earendil-works/pi-ai'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
@@ -65,15 +66,32 @@ function classifyPiAiError(message: string): string {
 }
 
 /**
+ * The call a compelled request was owed, phrased for one failure message.
+ * @param toolChoice - the declared choice that was not honoured.
+ * @returns the requirement, naming the function when the choice named one.
+ */
+function unmetToolChoiceTarget(toolChoice: ToolChoice): string {
+  return typeof toolChoice === 'string'
+    ? 'a tool, which this request required'
+    : `the required tool "${toolChoice.function.name}"`
+}
+
+/**
  * Map a terminal pi-ai event to the harness finish reason.
  * @param message - the assistant message carried by the `done` or `error` event.
  * @param contextWindow - resolved catalog capacity for usage-based overflow detection.
+ * @param toolChoice - the tool choice this request declared, when it declared one.
  * @returns the mapped harness reason. Recognized error text, `stop` usage above
  *   `contextWindow`, and zero-output `length` usage that fills the window map
  *   to `CONTEXT_WINDOW_EXCEEDED`; a `stop` with no content blocks maps to an
- *   `EMPTY_RESPONSE` error.
+ *   `EMPTY_RESPONSE` error, and a `stop` that answers in prose while
+ *   `toolChoice` required a call maps to a `TOOL_CHOICE_UNMET` error.
  */
-export function mapStopReason(message: AssistantMessage, contextWindow?: number): FinishReason {
+export function mapStopReason(
+  message: AssistantMessage,
+  contextWindow?: number,
+  toolChoice?: ToolChoice,
+): FinishReason {
   const piAiOverflow = isContextOverflow(message, contextWindow)
   const harnessOverflow = message.stopReason === 'error'
     && message.errorMessage !== undefined
@@ -101,6 +119,21 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
           },
         }
       }
+      // A declared tool choice is a requirement, and a stop that carries prose
+      // instead of the call fails that requirement rather than answering it.
+      // Only the `stop` reason reaches this check: a response the output cap
+      // cut off is reported as running out of room, which is a different fact
+      // and must not read as an ignored requirement.
+      if (toolChoice !== undefined && toolChoice !== 'none' && toolChoice !== 'auto'
+        && !message.content.some(block => block.type === 'toolCall')) {
+        return {
+          kind: 'error',
+          failure: {
+            message: `model "${message.model}" answered without calling ${unmetToolChoiceTarget(toolChoice)}`,
+            code: TOOL_CHOICE_UNMET_CODE,
+          },
+        }
+      }
       return { kind: 'stop' }
     case 'length': return { kind: 'max-tokens' }
     case 'toolUse': return { kind: 'tool-calls' }
@@ -121,12 +154,14 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
  * `finish` chunks (the harness protocol's other error-delivery style).
  * @param events - one assistant turn's pi-ai event stream.
  * @param contextWindow - resolved catalog capacity for usage-based overflow detection.
+ * @param toolChoice - the tool choice this request declared, when it declared one.
  * @returns the harness chunks, ending with `usage` then `finish`; throws
  *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event.
  */
 export async function* toStreamChunks(
   events: AsyncIterable<AssistantMessageEvent>,
   contextWindow?: number,
+  toolChoice?: ToolChoice,
 ): AsyncGenerator<StreamChunk> {
   // pi-ai contentIndex ↔ our block index map 1:1 (both count blocks from 0
   // in stream order), but we track ids per index for tool calls.
@@ -192,7 +227,7 @@ export async function* toStreamChunks(
         yield { type: 'usage', usage: mapUsage(event.message.usage) }
         yield {
           type: 'finish',
-          reason: mapStopReason(event.message, contextWindow),
+          reason: mapStopReason(event.message, contextWindow, toolChoice),
           replayState: toPiReplayState(event.message),
         }
         return
@@ -200,7 +235,7 @@ export async function* toStreamChunks(
         // In-stream error delivery (pi-ai's style) → error finish chunk
         // (the harness's other sanctioned error path besides throwing).
         yield { type: 'usage', usage: mapUsage(event.error.usage) }
-        yield { type: 'finish', reason: mapStopReason(event.error, contextWindow) }
+        yield { type: 'finish', reason: mapStopReason(event.error, contextWindow, toolChoice) }
         return
       // no default: AssistantMessageEvent is pi-ai's closed union; a new
       // event type should fail compilation here via tsc's exhaustiveness

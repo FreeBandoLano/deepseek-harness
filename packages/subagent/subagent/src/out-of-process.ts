@@ -25,10 +25,12 @@ const utf8Decoder = new TextDecoder()
 
 /**
  * Limit provider-authored failure detail without splitting a UTF-8 sequence.
+ * Exported for in-process providers, which author the same bounded detail from
+ * the child's own terminal turn instead of from a wire message.
  * @param diagnostic - safe diagnostic text produced by the provider.
  * @returns the original text, or a visibly truncated value within the limit.
  */
-function limitSubagentDiagnostic(diagnostic: string): string {
+export function limitSubagentDiagnostic(diagnostic: string): string {
   const bytes = utf8Encoder.encode(diagnostic)
   if (bytes.byteLength <= MAX_SUBAGENT_DIAGNOSTIC_BYTES) return diagnostic
 

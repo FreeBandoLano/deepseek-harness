@@ -56,6 +56,7 @@ import type {
   ResolvedRetryPolicy,
   StreamChunk,
   ToolChoice,
+  ToolChoiceSupport,
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
@@ -121,6 +122,42 @@ export interface PiAiAuthInjection {
  * assertion on the captured request body rather than by swapping entries.
  */
 type SimpleStreamOptionsWithToolChoice = ModelsSimpleStreamOptions & { toolChoice?: ToolChoice }
+
+/**
+ * What each protocol this adapter serves does with a declared tool choice —
+ * read from the protocol implementations in the pinned dependency, not from the
+ * vendors' documentation:
+ *
+ *   - `openai-completions.js:557` and `openai-responses.js:225` assign
+ *     `params.tool_choice = options.toolChoice` verbatim, so the string forms
+ *     arrive as written. The named-function form, though, is the Chat
+ *     Completions shape (`{type:'function', function:{name}}`); the Responses
+ *     API wants a flat `{type:'function', name}`, so that one kind is NOT
+ *     carried there and is refused rather than sent malformed.
+ *   - `anthropic-messages.js:789` maps only its own vocabulary
+ *     (`"auto" | "any" | "none" | {type:'tool',…}`). Handed `'required'` it
+ *     writes `{type:"required"}`, and handed our named form it writes that
+ *     through unchanged: both are malformed bodies that come back as a 400 from
+ *     a paid endpoint, far from their cause. Its `any` is its own spelling of
+ *     "compel", so carrying it is a translation this adapter does not do.
+ *
+ * A protocol absent from this table resolves to `undefined`, which the runtime
+ * treats as UNKNOWN — warned about and forwarded unchecked, never refused.
+ */
+const TOOL_CHOICE_BY_PROTOCOL: Readonly<Record<string, ToolChoiceSupport>> = {
+  'openai-completions': {
+    protocol: 'openai-completions',
+    carries: ['none', 'auto', 'required', 'function'],
+  },
+  'openai-responses': {
+    protocol: 'openai-responses',
+    carries: ['none', 'auto', 'required'],
+  },
+  'anthropic-messages': {
+    protocol: 'anthropic-messages',
+    carries: ['none', 'auto'],
+  },
+}
 
 /** Copy profile stream knobs into pi-ai's common option vocabulary. */
 function profileOptions(
@@ -310,6 +347,10 @@ export class PiAiAdapter extends LlmAdapter {
     // Only a cap the deployment configured is a request default; the
     // catalog's `maxTokens` sizes the model and stops there.
     const configuredMaxTokens = profile.configuredMaxTokens.get(model)
+    // Undefined for a protocol the table does not describe — carried as ABSENT
+    // rather than as an explicit `undefined`, because absent is the unknown case
+    // the runtime warns about and proceeds on, not a denial.
+    const toolChoice = TOOL_CHOICE_BY_PROTOCOL[resolvedModel.api]
     return {
       provider,
       id: model,
@@ -318,6 +359,7 @@ export class PiAiAdapter extends LlmAdapter {
       context: { contextWindow: resolvedModel.contextWindow },
       ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
       ...reasoningInfo(resolvedModel, defaultLevel),
+      ...toolChoice === undefined ? {} : { toolChoice },
     }
   }
 

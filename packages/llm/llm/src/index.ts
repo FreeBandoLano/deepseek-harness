@@ -24,9 +24,9 @@ import { freezeMessage, type Message } from './message.ts'
 import { resolveRetryPolicy } from './retry-policy.ts'
 import type { ResolvedRetryPolicy } from './retry-policy.ts'
 import type { ProviderRequestId } from './brand.ts'
-import { callConfigEquals, deepFreeze } from './call-config.ts'
+import { callConfigEquals, deepFreeze, TOOL_CHOICE_KINDS, toolChoiceKind } from './call-config.ts'
 import type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
-import { HarnessError, INVALID_CREDENTIAL_CODE } from './error.ts'
+import { HarnessError, INVALID_CREDENTIAL_CODE, TOOL_CHOICE_UNSUPPORTED_CODE } from './error.ts'
 import { normalizeLlmFailure } from './adapter-failure.ts'
 import { normalizeApiKey } from './api-key.ts'
 import { contentHasImage, projectImagesForTextModel } from './content.ts'
@@ -41,7 +41,7 @@ export * from './content.ts'
 export * from './message.ts'
 export * from './retry-policy.ts'
 export { BlockAssembler } from './assembler.ts'
-export { callConfigEquals, deepFreeze, isAgentLoopRequest, markAgentLoopRequest, toolChoiceEquals } from './call-config.ts'
+export { callConfigEquals, deepFreeze, isAgentLoopRequest, markAgentLoopRequest, TOOL_CHOICE_KINDS, toolChoiceEquals, toolChoiceKind } from './call-config.ts'
 export type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -660,6 +660,53 @@ export class LlmRuntime extends Service {
     return this.normalizeModelInfo(registration, model, resolved)
   }
 
+  /**
+   * Refuse a tool choice the route's protocol cannot carry — or say loudly that
+   * the route could not be asked.
+   *
+   * THE EARLIEST POINT THE PROTOCOL IS KNOWABLE ON THIS PATH. The adapter has
+   * just resolved the exact model, so the protocol is known, and no request has
+   * been built: "nothing was sent" is therefore structural rather than a claim
+   * about timing. Both callers that reach an adapter dispatch run this, so no
+   * path can drop the field quietly — and a declaration nothing checks is the
+   * failure this exists to remove, because the operator would believe an agent
+   * is compelled while the wire never carried it.
+   *
+   * ABSENT IS NOT A DENIAL. An adapter that declares nothing may still forward
+   * the field, so that case proceeds — with a warning naming the adapter, the
+   * route and the declared value, because proceeding in silence is the very
+   * thing being refused here.
+   * @param registration - the adapter registration owning this route.
+   * @param modelInfo - the normalized exact-model metadata.
+   * @param config - the call configuration carrying the declaration.
+   */
+  private assertToolChoiceCarried(
+    registration: AdapterRegistration,
+    modelInfo: LlmResolvedModelInfo,
+    config: LlmCallConfig,
+  ): void {
+    const declared = config.toolChoice
+    if (declared === undefined) return
+    const support = modelInfo.toolChoice
+    if (support === undefined) {
+      this.ctx.logger.warn(
+        `llm: adapter ${registration.adapter.constructor.name} declares no tool-choice capability for route `
+        + `"${config.provider}" model "${config.model}"; the declared ${JSON.stringify(declared)} will be `
+        + 'forwarded unchecked — teach that adapter to declare what its protocol carries',
+      )
+      return
+    }
+    const kind = toolChoiceKind(declared)
+    if (support.carries.includes(kind)) return
+    throw new LlmError(
+      `tool choice ${JSON.stringify(declared)} is declared for provider "${config.provider}" model `
+      + `"${config.model}", but that route speaks "${support.protocol}", whose implementation has no field for `
+      + `it (it carries ${support.carries.length === 0 ? 'no tool choice at all' : support.carries.join(', ')}) `
+      + '— remove the declaration, or route the agent to a protocol that carries it',
+      TOOL_CHOICE_UNSUPPORTED_CODE,
+    )
+  }
+
   /** Validate and detach one adapter-returned exact model result. */
   private normalizeModelInfo(
     registration: AdapterRegistration,
@@ -699,6 +746,17 @@ export class LlmRuntime extends Service {
         'INVALID_MODEL_MAX_TOKENS',
       )
     }
+    const declaredSupport = resolved.toolChoice
+    if (declaredSupport !== undefined
+      && (typeof declaredSupport.protocol !== 'string'
+        || declaredSupport.protocol.length === 0
+        || !Array.isArray(declaredSupport.carries)
+        || declaredSupport.carries.some(kind => !TOOL_CHOICE_KINDS.includes(kind)))) {
+      throw new LlmError(
+        `adapter returned invalid tool-choice capability for provider "${provider}" model "${model}"`,
+        'INVALID_MODEL_TOOL_CHOICE',
+      )
+    }
     const info: LlmResolvedModelInfo = {
       provider,
       id: model,
@@ -707,6 +765,9 @@ export class LlmRuntime extends Service {
       ...inputModalities === undefined ? {} : { inputModalities },
       ...context === undefined ? {} : { context: { contextWindow: context.contextWindow } },
       ...defaultMaxTokens === undefined ? {} : { defaultMaxTokens },
+      ...declaredSupport === undefined ? {} : {
+        toolChoice: { protocol: declaredSupport.protocol, carries: [...declaredSupport.carries] },
+      },
     }
     const reasoning = resolved.reasoning
     if (reasoning === undefined) return info
@@ -825,6 +886,7 @@ export class LlmRuntime extends Service {
     const registration = this.registration(config.provider)
     const adapterCall = await registration.adapter.prepareCall(config.provider, config.model, signal)
     const modelInfo = this.normalizeModelInfo(registration, config.model, adapterCall.model)
+    this.assertToolChoiceCarried(registration, modelInfo, config)
     const resolved = this.resolveCallWithInfo(config, modelInfo)
     const resolvedConfig = deepFreeze(structuredClone(resolved.config))
     const context = resolved.context === undefined
@@ -909,6 +971,7 @@ export class LlmRuntime extends Service {
       if (prepared === undefined) {
         const adapterCall = await adapter.prepareCall(options.provider, options.model, options.signal)
         modelInfo = this.normalizeModelInfo(registration, options.model, adapterCall.model)
+        this.assertToolChoiceCarried(registration, modelInfo, options)
         resolvedConfig = this.resolveCallWithInfo(options, modelInfo).config
         dispatch = options => adapterCall.stream(options)
       } else {

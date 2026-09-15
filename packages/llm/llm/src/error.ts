@@ -39,6 +39,18 @@ export const QUOTA_EXCEEDED_CODE = 'QUOTA'
 export const TOOL_CHOICE_UNMET_CODE = 'TOOL_CHOICE_UNMET'
 
 /**
+ * Canonical provider-neutral code for a request declaring a tool choice the
+ * route's protocol cannot carry. A structural failure, distinct from
+ * {@link TOOL_CHOICE_UNMET_CODE}: there the model received the requirement and
+ * answered anyway, here the field would never have reached the wire at all (or,
+ * on a protocol with a different vocabulary, would have gone out malformed).
+ * Raised before dispatch, so no request is sent and the session log cannot show
+ * a compelled header for a request that never happened. Deliberately outside the
+ * default retryable set: the protocol will not grow the field between attempts.
+ */
+export const TOOL_CHOICE_UNSUPPORTED_CODE = 'TOOL_CHOICE_UNSUPPORTED'
+
+/**
  * Canonical provider-neutral code for a response that completed normally but
  * carried no content blocks at all. Providers occasionally emit a degenerate
  * completion (a terminal stop with zero output); adapters classify it as this

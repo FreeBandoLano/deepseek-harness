@@ -19,6 +19,7 @@ import type {
   ModelModality,
   ResolvedRetryPolicy,
   StreamChunk,
+  ToolChoiceSupport,
 } from '@deepseek-ai/dsh-llm'
 import type {
   AttachmentId,
@@ -160,6 +161,19 @@ export const DEFAULT_FILE_QUOTA_CLEANUP_BATCH = 100
 export const DEFAULT_FILES_API_TIMEOUT_MS = 60_000
 const STREAM_IDLE_TIMEOUT_CODE = 'LLM_STREAM_IDLE_TIMEOUT'
 const FILES_API_TIMEOUT_CODE = 'DEEPSEEK_FILES_API_TIMEOUT'
+
+/**
+ * Protocol this adapter speaks, named for the refusal that quotes it. DeepSeek's
+ * endpoint is OpenAI-compatible and its `tool_choice` field exists, but THIS
+ * implementation builds its request without one, so the honest declaration is
+ * that it carries no kind at all. Declared rather than left unknown on purpose:
+ * unknown warns and proceeds, and a declared tool choice would then be dropped
+ * silently — the exact outcome the declaration refuses.
+ */
+const DEEPSEEK_TOOL_CHOICE: ToolChoiceSupport = {
+  protocol: 'deepseek-chat-completions',
+  carries: [],
+}
 const OFF_REASONING_EFFORT = ReasoningEffortId('off')
 const LOW_REASONING_EFFORT = ReasoningEffortId('low')
 const HIGH_REASONING_EFFORT = ReasoningEffortId('high')
@@ -396,6 +410,7 @@ export class DeepSeekAdapter extends LlmAdapter {
         : modelInfo(provider, configured),
       context: { contextWindow },
       defaultMaxTokens: configured?.maxTokens ?? connection.maxTokens,
+      toolChoice: DEEPSEEK_TOOL_CHOICE,
       ...connection.defaults.thinking === 'disabled'
         ? {
           reasoning: {

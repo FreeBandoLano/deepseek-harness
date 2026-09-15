@@ -278,6 +278,15 @@ export interface LlmResolvedModelInfo extends LlmModelInfo {
   defaultMaxTokens?: number
   /** Adapter-owned selectable reasoning levels when exposed. */
   reasoning?: LlmModelReasoningInfo
+  /**
+   * What this route's protocol does with a declared tool choice, when the
+   * adapter says. ABSENT IS NOT A DENIAL: an adapter that does not describe
+   * itself (a third-party one, or one written before this field existed) leaves
+   * it undefined, and the harness then proceeds with a loud warning rather than
+   * refusing a capability it cannot see — the same rule the advisory catalog
+   * states for `listModels`, whose absence is not evidence of absence either.
+   */
+  toolChoice?: ToolChoiceSupport
 }
 
 /**
@@ -349,6 +358,44 @@ export type ToolChoice =
   | 'auto'
   | 'required'
   | { readonly type: 'function'; readonly function: { readonly name: string } }
+
+/**
+ * One spelling of {@link ToolChoice}, collapsed to the value that decides
+ * capability. An adapter that carries the string forms may still have no field
+ * for the named-function shape, or speak a different word for the same idea, so
+ * capability is declared — and checked — per kind rather than per field.
+ */
+export type ToolChoiceKind = 'none' | 'auto' | 'required' | 'function'
+
+/**
+ * What one route's protocol does with a declared tool choice: which kinds its
+ * implementation forwards to the wire, and the protocol that decision belongs to.
+ *
+ * This is a STRUCTURAL declaration about a protocol, never a claim about an
+ * endpoint: a gateway may accept the field and ignore it, and that stays a
+ * measured fact with its own evidence. Its purpose is the opposite failure —
+ * a declaration the protocol cannot express at all, which would otherwise be
+ * dropped (or, for a protocol with a different vocabulary, sent malformed).
+ */
+export interface ToolChoiceSupport {
+  /**
+   * Protocol identifier the declaration describes, as the adapter names it —
+   * the string a reader can look up in the protocol's implementation. It is
+   * carried into the refusal because "unsupported" without the protocol leaves
+   * the operator guessing which limitation to fix.
+   */
+  readonly protocol: string
+  /**
+   * The kinds this protocol's implementation forwards to the wire unchanged.
+   * Absent from this list is a refusal, not a warning.
+   */
+  readonly carries: readonly ToolChoiceKind[]
+}
+
+/** The kind one declared tool choice belongs to, for capability comparison. */
+export function toolChoiceKind(choice: ToolChoice): ToolChoiceKind {
+  return typeof choice === 'string' ? choice : 'function'
+}
 
 /** A single model request, fully assembled. */
 export interface GenerateOptions {

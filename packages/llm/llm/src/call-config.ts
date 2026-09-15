@@ -6,7 +6,7 @@
  * @module dsh-llm/call-config
  */
 
-import type { GenerateOptions, ToolChoice } from './types.ts'
+import type { GenerateOptions, ToolChoice, ToolChoiceKind } from './types.ts'
 import type { ReasoningEffortId } from './brand.ts'
 
 /** Process-local identities of request objects assembled by dsh-agent-loop. */
@@ -59,6 +59,21 @@ export function toolChoiceEquals(a: ToolChoice | undefined, b: ToolChoice | unde
   if (a === undefined || b === undefined) return a === b
   if (typeof a === 'string' || typeof b === 'string') return a === b
   return a.type === b.type && a.function.name === b.function.name
+}
+
+/** Every kind a {@link ToolChoice} can be, for capability validation. */
+export const TOOL_CHOICE_KINDS: readonly ToolChoiceKind[] = ['none', 'auto', 'required', 'function']
+
+/**
+ * The kind one declared tool choice belongs to. Capability is declared per kind
+ * rather than per field because a protocol may carry the string forms and have
+ * no place for the named-function shape — or spell "compel" some other way —
+ * so "does this route carry it" is only answerable for one value at a time.
+ * @param choice - one declared tool choice.
+ * @returns the kind it belongs to.
+ */
+export function toolChoiceKind(choice: ToolChoice): ToolChoiceKind {
+  return typeof choice === 'string' ? choice : 'function'
 }
 
 /**

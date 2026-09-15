@@ -3643,7 +3643,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmResolvedModelInfo',
-    declaration: 'export interface LlmResolvedModelInfo extends LlmModelInfo {\n    context?: LlmModelContext;\n    defaultMaxTokens?: number;\n    reasoning?: LlmModelReasoningInfo;\n}',
+    declaration: 'export interface LlmResolvedModelInfo extends LlmModelInfo {\n    context?: LlmModelContext;\n    defaultMaxTokens?: number;\n    reasoning?: LlmModelReasoningInfo;\n    toolChoice?: ToolChoiceSupport;\n}',
   },
   {
     name: 'LlmRuntime',
@@ -4756,6 +4756,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ToolChoice',
     declaration: 'export type ToolChoice = \'none\' | \'auto\' | \'required\' | {\n    readonly type: \'function\';\n    readonly function: {\n        readonly name: string;\n    };\n};',
+  },
+  {
+    name: 'ToolChoiceKind',
+    declaration: 'export type ToolChoiceKind = \'none\' | \'auto\' | \'required\' | \'function\';',
+  },
+  {
+    name: 'ToolChoiceSupport',
+    declaration: 'export interface ToolChoiceSupport {\n    readonly protocol: string;\n    readonly carries: readonly ToolChoiceKind[];\n}',
   },
   {
     name: 'ToolDefinition',

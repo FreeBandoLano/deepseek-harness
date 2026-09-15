@@ -134,6 +134,24 @@ describe('tool-choice capability', () => {
     })).rejects.toMatchObject({ code: TOOL_CHOICE_UNSUPPORTED_CODE })
   })
 
+  it('declares, per protocol, exactly what that implementation forwards', async () => {
+    // Pinned per protocol because the table now decides whether a turn runs at all:
+    // a silent edit to a `carries` list changes behaviour with no other signal, and
+    // the two subtle rows are the ones no other case exercises — Responses carries
+    // `required` but not our named-function shape (its own form is flat), and
+    // Anthropic carries only the two kinds it shares with our vocabulary.
+    const expected = {
+      'openai-completions': ['none', 'auto', 'required', 'function'],
+      'openai-responses': ['none', 'auto', 'required'],
+      'anthropic-messages': ['none', 'auto'],
+    }
+    for (const [api, carries] of Object.entries(expected)) {
+      const ctx = await harness('http://127.0.0.1:1', api)
+      expect((await ctx.llm.resolveModelInfo('deepseek', MODEL)).toolChoice)
+        .toEqual({ protocol: api, carries })
+    }
+  })
+
   it('leaves a route with no declaration at all completely alone', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, 'anthropic-messages')

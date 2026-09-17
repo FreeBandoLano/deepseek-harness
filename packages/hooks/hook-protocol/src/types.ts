@@ -25,8 +25,10 @@ declare module '@deepseek-ai/dsh-session/types' {
     }
     /**
      * Log-only outcome paired to `hook/invoked` by `handlerId`. Decision is the
-     * parsed permission result, `stop` for `continue:false`, or `pass`; exit code
-     * may be absent, stderr is bounded, and duration is wall-clock runtime.
+     * parsed permission result, `stop` for `continue:false`, `unavailable` when
+     * the run produced no trustworthy outcome (see {@link HookOutput.unusable}),
+     * else `pass`; exit code may be absent, stderr is bounded, the fault rides in
+     * `failure`, and duration is wall-clock runtime.
      */
     'hook/result': {
       turn: number
@@ -35,6 +37,12 @@ declare module '@deepseek-ai/dsh-session/types' {
       decision: string
       exitCode?: number
       stderrSummary?: string
+      /**
+       * `<kind>: <detail>` when the run was unusable — the hook never started, or
+       * a captured stream was cut at the executor's byte cap. Pairs with
+       * `decision: 'unavailable'` and is bounded like `stderrSummary`.
+       */
+      failure?: string
       durationMs: number
     }
   }
@@ -77,6 +85,29 @@ export interface MatcherGroup {
  * mode for its dialect.
  */
 export type MatcherMode = 'claude-code' | 'codex'
+
+/**
+ * Why a hook run produced no trustworthy outcome. The kinds are the ways a
+ * bridge is left holding nothing usable: the process never started, or a
+ * captured stream was cut off. Neither is a decision, so neither may be recorded
+ * as one — a hook that could not run must not read as a hook that chose silence.
+ */
+export interface HookRunFault {
+  /**
+   * `'not-run'`: the hook process could not be started at all (the executor
+   * rejected the spawn — an unusable workdir, a sandbox wrapper that will not
+   * launch). `'stdout-truncated'` / `'stderr-truncated'`: the stream hit the
+   * executor's byte cap, so its text is a prefix, not the whole output.
+   */
+  kind: 'not-run' | 'stdout-truncated' | 'stderr-truncated'
+  /**
+   * What to say out loud, phrased for a log line and the durable record: the
+   * executor's message plus the workdir it was given for `'not-run'` (a spawn
+   * error names the program, never the directory that was actually missing), or
+   * the byte cap for a truncated stream.
+   */
+  detail: string
+}
 
 /**
  * The dialect-neutral OUTCOME a hook produced, parsed from its exit code +
@@ -134,4 +165,14 @@ export interface HookOutput {
    * bridge logs + warns when this is present.
    */
   updatedInput?: Record<string, unknown>
+  /**
+   * Set when this run produced NO trustworthy outcome — the process never
+   * started, or a captured stream was cut off mid-body. Every other field is
+   * then the protocol's fallback rather than the hook's answer, and
+   * {@link parseHookOutput} refuses to read structured fields out of a truncated
+   * stdout. A bridge must still FAIL OPEN on it (an advisory hook may not break
+   * the turn) but must never fail SILENTLY: log it, and say so where the missing
+   * context would have been delivered.
+   */
+  unusable?: HookRunFault
 }

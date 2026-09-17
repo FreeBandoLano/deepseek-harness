@@ -97,4 +97,20 @@ describe('mergeHookOutputs — reasons, stop, context, systemMessages accumulate
     expect(m.additionalContext).toEqual(['ctx-A', 'ctx-B'])
     expect(m.systemMessages).toEqual(['warn-A', 'warn-B'])
   })
+
+  it('collects one failure per hook that produced nothing usable, without losing the others', () => {
+    // The point's other hooks still deliver: one broken hook is a caveat, not a
+    // reason to drop the context its neighbours carried.
+    const m = mergeHookOutputs([
+      out({ unusable: { kind: 'not-run', detail: 'spawn bwrap ENOENT — the hook never started (workdir: /gone)' } }),
+      out({ additionalContext: 'still delivered' }),
+    ])
+    expect(m.failures).toEqual(['not-run: spawn bwrap ENOENT — the hook never started (workdir: /gone)'])
+    expect(m.additionalContext).toEqual(['still delivered'])
+    expect(m.decision).toBe('none')
+  })
+
+  it('a whole-capture point collects no failures — the control', () => {
+    expect(mergeHookOutputs([out(), out({ additionalContext: 'fine' })]).failures).toEqual([])
+  })
 })

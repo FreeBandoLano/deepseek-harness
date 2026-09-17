@@ -29,6 +29,13 @@ export interface MergedHookOutcome {
   additionalContext: string[]
   /** Every hook's `systemMessage`, in hook order. */
   systemMessages: string[]
+  /**
+   * Every hook that produced NO usable outcome, in hook order, as
+   * `<kind>: <detail>`. A bridge fails open on these — the turn proceeds — but
+   * must not fail silently, so this is what it says out loud, where the context
+   * the hook would have carried was going to be delivered.
+   */
+  failures: string[]
 }
 
 /** Rank a single hook's decision for the deny>ask>allow precedence (higher = stricter). */
@@ -67,6 +74,7 @@ export function mergeHookOutputs(outputs: HookOutput[]): MergedHookOutcome {
   let stopReason: string | undefined
   const additionalContext: string[] = []
   const systemMessages: string[] = []
+  const failures: string[] = []
 
   for (const out of outputs) {
     const r = rank(out.decision)
@@ -86,6 +94,9 @@ export function mergeHookOutputs(outputs: HookOutput[]): MergedHookOutcome {
     if (out.systemMessage !== undefined && out.systemMessage.length > 0) {
       systemMessages.push(out.systemMessage)
     }
+    if (out.unusable !== undefined) {
+      failures.push(`${out.unusable.kind}: ${out.unusable.detail}`)
+    }
   }
 
   const reasons = reasonsByRank.get(maxRank) ?? []
@@ -96,5 +107,6 @@ export function mergeHookOutputs(outputs: HookOutput[]): MergedHookOutcome {
     ...stopReason !== undefined ? { stopReason } : {},
     additionalContext,
     systemMessages,
+    failures,
   }
 }

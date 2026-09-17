@@ -6,9 +6,9 @@
  * @module @deepseek-ai/dsh-hook-protocol/runner
  */
 
-import type { ShellExecutor } from '@deepseek-ai/dsh-shell'
+import type { ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { parseHookOutput } from './codec.ts'
-import type { CommandHook, HookOutput } from './types.ts'
+import type { CommandHook, HookOutput, HookRunFault } from './types.ts'
 
 /**
  * The reference default per-hook timeout, in ms (10 minutes) — the value both
@@ -84,23 +84,62 @@ export async function runHook(
   }
 
   try {
-    const result = await bash.run(bash.resolve(request))
+    const spec = bash.resolve(request)
+    const result = await bash.run(spec)
     // ShellRunResult.exitCode is `number | null` (null = died by signal); the
     // protocol's exit-code contract is numeric, so a signal death maps to
     // `undefined` (a non-blocking error — no clean exit code to act on).
     const exitCode = result.exitCode ?? undefined
     return {
-      output: parseHookOutput(exitCode, result.stdout.text, result.stderr.text, options.expectedEventName),
+      output: parseHookOutput(
+        exitCode,
+        result.stdout.text,
+        result.stderr.text,
+        options.expectedEventName,
+        captureFault(result, spec.stdoutMaxBytes),
+      ),
       durationMs: now() - started,
     }
   } catch (error: unknown) {
     // The executor rejects only on infrastructure faults (unusable workdir,
-    // missing shell). A hook that cannot run is a non-blocking error: no exit
-    // code, the failure on stderr for the record. The turn proceeds.
+    // missing shell, a sandbox wrapper that will not launch). The turn proceeds
+    // — that is the fail-open contract. What must NOT happen is this outcome
+    // reading as a decision the hook made: nothing ran, so the fault is named,
+    // and named WITH the workdir, because a spawn error names the program it
+    // tried (`spawn bwrap ENOENT`) even when the missing thing is the directory.
     const message = error instanceof Error ? error.message : String(error)
     return {
-      output: parseHookOutput(undefined, '', message),
+      output: parseHookOutput(undefined, '', message, options.expectedEventName, {
+        kind: 'not-run',
+        detail: `${message} — the hook never started (workdir: ${options.cwd ?? 'the executor default'})`,
+      }),
       durationMs: now() - started,
     }
   }
+}
+
+/**
+ * Name the capture defect that makes a completed run's output untrustworthy, or
+ * `undefined` when both streams arrived whole. The executor reports `truncated`
+ * per stream and nothing downstream consulted it: a hook whose stdout is cut
+ * does not fail, the cut JSON parses to nothing, and the run was recorded as
+ * though the hook had chosen silence. This is what carries that fact forward.
+ * @param result - the completed run's captured streams.
+ * @param stdoutCap - the byte cap the executor applied to stdout for this run.
+ * @returns the fault for {@link parseHookOutput}, or `undefined` when nothing was lost.
+ */
+function captureFault(result: ShellRunResult, stdoutCap: number): HookRunFault | undefined {
+  if (result.stdout.truncated) {
+    return {
+      kind: 'stdout-truncated',
+      detail: `stdout was cut at the executor's ${stdoutCap}-byte cap, so any JSON in it is incomplete`,
+    }
+  }
+  if (result.stderr.truncated) {
+    return {
+      kind: 'stderr-truncated',
+      detail: 'stderr was cut at the executor\'s output cap, so any reason in it is incomplete',
+    }
+  }
+  return undefined
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { appendHookInvoked, appendHookResult, summarizeStderr, type HookOutput } from '@deepseek-ai/dsh-hook-protocol'
+import { appendHookInvoked, appendHookResult, parseHookOutput, summarizeStderr, type HookOutput } from '@deepseek-ai/dsh-hook-protocol'
 
 /** A {@link HookOutput} with the required stream fields defaulted. */
 function output(over: Partial<HookOutput> = {}): HookOutput {
@@ -119,5 +119,56 @@ describe('summarizeStderr', () => {
   it('truncates past the cap with an ellipsis', () => {
     expect(summarizeStderr('abcdef', 4)).toBe('abcd…')
     expect(summarizeStderr('x'.repeat(600), 500)).toBe('x'.repeat(500) + '…')
+  })
+})
+
+describe('hook/result — a run that decided nothing is not a pass', () => {
+  it('a hook that never started records `unavailable` with the fault beside it', () => {
+    const session = Session.create(SessionId('s'))
+    appendHookResult(session, {
+      turn: 2, point: 'UserPromptSubmit', handlerId: 'gone', stderrSummaryMaxChars: 500, durationMs: 8,
+      output: output({
+        exitCode: undefined,
+        stderr: 'spawn bwrap ENOENT',
+        unusable: { kind: 'not-run', detail: 'spawn bwrap ENOENT — the hook never started (workdir: /gone)' },
+      }),
+    })
+    const ev = [...session.events].find(e => e.type === 'hook/result')
+    if (ev?.type !== 'hook/result') throw new Error('no hook/result recorded')
+    expect(ev.data.decision).toBe('unavailable')
+    expect(ev.data.failure).toBe('not-run: spawn bwrap ENOENT — the hook never started (workdir: /gone)')
+    expect(ev.data.stderrSummary).toBe('spawn bwrap ENOENT')
+    expect('exitCode' in ev.data).toBe(false)
+  })
+
+  it('a truncated capture records `unavailable` too, and a real decision still wins', () => {
+    const session = Session.create(SessionId('s'))
+    appendHookResult(session, {
+      turn: 1, point: 'PreToolUse', handlerId: 'cut', stderrSummaryMaxChars: 500, durationMs: 5,
+      output: output({ unusable: { kind: 'stdout-truncated', detail: "stdout was cut at the executor's 64000-byte cap" } }),
+    })
+    appendHookResult(session, {
+      turn: 1, point: 'PreToolUse', handlerId: 'blocked-cut', stderrSummaryMaxChars: 500, durationMs: 5,
+      // Through the parser, as the runner does: exit 2 sets the structural
+      // `block` decision, and the truncation fault rides beside it.
+      output: parseHookOutput(2, '', 'no', undefined, { kind: 'stderr-truncated', detail: 'stderr was cut' }),
+    })
+    const decisions = [...session.events]
+      .filter(e => e.type === 'hook/result')
+      .map(e => e.type === 'hook/result' ? [e.data.handlerId, e.data.decision] : [])
+    // The cut run decided nothing; the exit-2 run still blocks (its decision is
+    // structural) with the fault recorded alongside.
+    expect(decisions).toEqual([['cut', 'unavailable'], ['blocked-cut', 'block']])
+  })
+
+  it('an intact hook that had nothing to say still records `pass` — the discrimination', () => {
+    const session = Session.create(SessionId('s'))
+    appendHookResult(session, {
+      turn: 1, point: 'PreToolUse', handlerId: 'quiet', stderrSummaryMaxChars: 500, durationMs: 5, output: output(),
+    })
+    const ev = [...session.events].find(e => e.type === 'hook/result')
+    if (ev?.type !== 'hook/result') throw new Error('no hook/result recorded')
+    expect(ev.data.decision).toBe('pass')
+    expect('failure' in ev.data).toBe(false)
   })
 })

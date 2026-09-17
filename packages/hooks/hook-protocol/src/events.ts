@@ -83,22 +83,35 @@ export function appendHookInvoked(session: Session, invocation: HookInvocation):
 }
 
 /**
- * Append the durable result paired with `hook/invoked`. The recorded decision
- * is the parsed decision, then `stop` for `continue:false`, else `pass`; stderr
- * is trimmed and capped, and an absent process exit stays omitted.
+ * Append the durable result paired with `hook/invoked`. The recorded decision is
+ * the parsed decision, then `stop` for `continue:false`, then `unavailable` when
+ * the run produced no trustworthy outcome ({@link HookOutput.unusable} — the hook
+ * never started, or a stream was cut off), else `pass`; stderr is trimmed and
+ * capped, the fault rides beside the decision as `failure`, and an absent process
+ * exit stays omitted.
  * @param session - the session whose open turn records the event.
  * @param record - the outcome to record: the decoded output plus the summary cap and duration.
  */
 export function appendHookResult(session: Session, record: HookResultRecord): void {
   const { output } = record
   const stderrSummary = summarizeStderr(output.stderr, record.stderrSummaryMaxChars)
+  // `pass` means "the hook ran and did not object". A hook that never started,
+  // or whose captured stdout was cut before its JSON ended, decided NOTHING —
+  // recording `pass` for it is the lie this branch exists to stop, so it takes
+  // its own decision value with the fault beside it.
+  const fault = output.unusable
+  const faultDetail = fault === undefined ? undefined : summarizeStderr(fault.detail, record.stderrSummaryMaxChars)
+  const failure = fault === undefined
+    ? undefined
+    : faultDetail === undefined ? fault.kind : `${fault.kind}: ${faultDetail}`
   session.append('hook/result', {
     turn: record.turn,
     point: record.point,
     handlerId: record.handlerId,
-    decision: output.decision ?? (output.continue === false ? 'stop' : 'pass'),
+    decision: output.decision ?? (output.continue === false ? 'stop' : failure !== undefined ? 'unavailable' : 'pass'),
     ...output.exitCode !== undefined ? { exitCode: output.exitCode } : {},
     ...stderrSummary !== undefined ? { stderrSummary } : {},
+    ...failure !== undefined ? { failure } : {},
     durationMs: record.durationMs,
   })
 }

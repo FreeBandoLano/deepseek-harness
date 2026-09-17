@@ -191,3 +191,48 @@ describe('parseHookOutput — structured stdout (exit 0 only)', () => {
     expect(out.reason).toBe('blocked')
   })
 })
+
+describe('parseHookOutput — a capture fault is not an answer', () => {
+  it('a truncated stdout is marked unusable and its JSON REFUSED, even when the prefix parses', () => {
+    // The control this exists to catch: the executor cut the stream, and what
+    // survived is valid JSON that claims a decision. A prefix is not what the
+    // hook said, so nothing in it may be applied — without this the run reads as
+    // "the hook chose silence" and the claimed decision is silently dropped.
+    const prefix = '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"cut off here"}}'
+    const out = parseHookOutput(0, prefix, '', 'SessionStart', {
+      kind: 'stdout-truncated',
+      detail: "stdout was cut at the executor's 64000-byte cap, so any JSON in it is incomplete",
+    })
+    expect(out.unusable?.kind).toBe('stdout-truncated')
+    expect(out.additionalContext).toBeUndefined()
+    expect(out.decision).toBeUndefined()
+    // The captured text is kept as evidence, and the fault is the record's to carry.
+    expect(out.stdout).toBe(prefix)
+  })
+
+  it('a hook that never started is marked unusable, with no decision and the fault on record', () => {
+    const detail = 'spawn bwrap ENOENT — the hook never started (workdir: /gone)'
+    const out = parseHookOutput(undefined, '', detail, undefined, { kind: 'not-run', detail })
+    expect(out.unusable).toEqual({ kind: 'not-run', detail })
+    expect(out.decision).toBeUndefined()
+    expect(out.stderr).toBe(detail)
+  })
+
+  it('a truncated stderr still blocks (exit 2 is structural) but is marked unusable', () => {
+    // The decision comes from the exit code, not the text, so it stands; the
+    // reason is a prefix and the caller must be able to say so.
+    const out = parseHookOutput(2, '', 'blocked because the cata', '', {
+      kind: 'stderr-truncated',
+      detail: "stderr was cut at the executor's output cap",
+    })
+    expect(out.decision).toBe('block')
+    expect(out.reason).toBe('blocked because the cata')
+    expect(out.unusable?.kind).toBe('stderr-truncated')
+  })
+
+  it('a whole capture carries no fault — the discrimination that keeps `pass` meaning something', () => {
+    const out = parseHookOutput(0, '{"decision":"approve"}', '')
+    expect(out.unusable).toBeUndefined()
+    expect(out.decision).toBe('approve')
+  })
+})

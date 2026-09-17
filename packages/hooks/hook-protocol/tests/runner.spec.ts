@@ -154,3 +154,44 @@ describe('runHook — outcome decoding + duration', () => {
     expect(output.decision).toBeUndefined()
   })
 })
+
+describe('runHook — a cut-off capture is carried out as a fault', () => {
+  it('a truncated stdout is unusable and names the cap the executor applied', async () => {
+    const { bash } = recordingBash(async () => result({
+      exitCode: 0,
+      // Valid JSON in the surviving prefix: the case that used to be silent.
+      stdout: { text: '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"cut', truncated: true },
+    }))
+    const { output } = await runHook(bash, { command: 'h' }, {
+      payload: {}, signal: testSignal(), defaultTimeoutMs: 1000, trailingNewline: true, expectedEventName: 'SessionStart',
+    }, clock())
+    expect(output.unusable?.kind).toBe('stdout-truncated')
+    expect(output.unusable?.detail).toContain('64000-byte cap')
+    expect(output.additionalContext).toBeUndefined()
+  })
+
+  it('a truncated stderr is unusable too (the reason would be a prefix)', async () => {
+    const { bash } = recordingBash(async () => result({
+      exitCode: 2, stderr: { text: 'blocked: the cata', truncated: true },
+    }))
+    const { output } = await runHook(bash, { command: 'h' }, { payload: {}, signal: testSignal(), defaultTimeoutMs: 1000, trailingNewline: true }, clock())
+    expect(output.decision).toBe('block')
+    expect(output.unusable?.kind).toBe('stderr-truncated')
+  })
+
+  it('a hook the executor could not start is unusable AND names the workdir it was given', async () => {
+    // The real fault this models: a session whose workspace directory is gone.
+    // The spawn error names the PROGRAM (`spawn bwrap ENOENT`) while the missing
+    // thing is the directory, so the workdir has to ride along or the record
+    // sends the reader hunting for a binary that is present.
+    const { bash } = recordingBash(async () => { throw new Error('spawn bwrap ENOENT') })
+    const { output } = await runHook(bash, { command: 'h' }, {
+      payload: {}, signal: testSignal(), defaultTimeoutMs: 1000, trailingNewline: true, cwd: '/deleted/workspace',
+    }, clock())
+    expect(output.unusable?.kind).toBe('not-run')
+    expect(output.unusable?.detail).toContain('spawn bwrap ENOENT')
+    expect(output.unusable?.detail).toContain('/deleted/workspace')
+    // The fail-open contract is unchanged: the turn proceeds, nothing throws.
+    expect(output.exitCode).toBeUndefined()
+  })
+})

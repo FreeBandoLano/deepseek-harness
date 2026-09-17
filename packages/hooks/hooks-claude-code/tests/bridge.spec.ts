@@ -45,8 +45,13 @@ function writeConfig(hooks: unknown, scripts: Record<string, string> = {}): stri
   return dir
 }
 
-async function harness(configDir: string, adapter: MockAdapter, beforeHooks?: (ctx: Context) => void): Promise<Context> {
-  return (await harnessWithFiber(configDir, adapter, beforeHooks)).ctx
+async function harness(
+  configDir: string,
+  adapter: MockAdapter,
+  beforeHooks?: (ctx: Context) => void,
+  bash?: { timeoutMs: number; maxOutputBytes?: number },
+): Promise<Context> {
+  return (await harnessWithFiber(configDir, adapter, beforeHooks, bash)).ctx
 }
 
 /** {@link harness}, also exposing the bridge's fiber for tests that dispose it. */
@@ -54,12 +59,13 @@ async function harnessWithFiber(
   configDir: string,
   adapter: MockAdapter,
   beforeHooks?: (ctx: Context) => void,
+  bash?: { timeoutMs: number; maxOutputBytes?: number },
 ): Promise<{ ctx: Context; hooks: Fiber }> {
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
   await ctx.plugin(AgentLoop, { agents: [] })
   await ctx.plugin(LocalSubprocessRuntime)
-  await ctx.plugin(LocalBashExecutor, { timeoutMs: 10_000 })
+  await ctx.plugin(LocalBashExecutor, { timeoutMs: 10_000, ...bash })
   beforeHooks?.(ctx)
   const hooks = await ctx.plugin(HooksClaude, { configPath: join(configDir, 'hooks.json') })
   ctx.llm.registerAdapter(['mock'], adapter)
@@ -428,6 +434,40 @@ describe('hooks-claude-code bridge — load resilience', () => {
     expect(events(agent).some(e => e.type === 'hook/invoked')).toBe(false) // no hook ran
   })
 
+describe('hooks-claude-code bridge — a hook the executor cut off is loud', () => {
+  it('records unavailable + the fault, and says so where the context would have been delivered', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-hooks-claude-'))
+    dirs.push(dir)
+    const s = join(dir, 'big.sh')
+    // 4 KB of additionalContext through a REAL executor capped at 512 bytes: the
+    // surviving prefix is still valid JSON, which is exactly why this used to be
+    // silent — the parse found no `additionalContext`, the record said `pass`, and
+    // the session never learned that its context had been dropped.
+    writeFileSync(s, '#!/usr/bin/env bash\nprintf \'{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\' "$(head -c 4096 /dev/zero | tr \'\\0\' \'x\')"\n')
+    chmodSync(s, 0o755)
+    writeFileSync(join(dir, 'hooks.json'), JSON.stringify({ hooks: { UserPromptSubmit: [{ matcher: '*', hooks: [{ type: 'command', command: s }] }] } }))
+
+    const adapter = new MockAdapter([textResponse('ok')])
+    const ctx = await harness(dir, adapter, undefined, { timeoutMs: 10_000, maxOutputBytes: 512 })
+    const agent = ctx.agentLoop.create(SessionId('a-cut'), { provider: 'mock', model: 'mock' })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await waitForIdle(ctx, agent)
+
+    // Said out loud, in the request the model actually saw.
+    const sent = JSON.stringify(adapter.requests[0]!.messages)
+    expect(sent).toContain('hook failure')
+    expect(sent).toContain('stdout was cut')
+    // The fragment is NOT delivered as if it were the hook's answer.
+    expect(sent).not.toContain('x'.repeat(100))
+    // And the durable record stops calling it a pass.
+    const result = [...agent.session.events].find(e => e.type === 'hook/result')
+    if (result?.type !== 'hook/result') throw new Error('no hook/result recorded')
+    expect(result.data.decision).toBe('unavailable')
+    expect(result.data.failure).toContain('stdout-truncated')
+  })
+})
+
+describe('hooks-claude-code bridge — export shape', () => {
   it('has the namespace-plugin export shape (no stray default) so the Loader keeps name/inject/apply', () => {
     // Postmortem 0001 guard: this plugin HAS `inject = ['bash']`, so a stray
     // `export default apply` would collapse the module via `unwrapExports`
@@ -443,4 +483,5 @@ describe('hooks-claude-code bridge — load resilience', () => {
     expect(unwrapped.inject).toEqual(['shell'])
     expect(typeof unwrapped.apply).toBe('function')
   })
+})
 })

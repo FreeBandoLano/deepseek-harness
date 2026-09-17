@@ -5,7 +5,7 @@
  * @module @deepseek-ai/dsh-hook-protocol/codec
  */
 
-import type { HookOutput } from './types.ts'
+import type { HookOutput, HookRunFault } from './types.ts'
 
 /** The exit code a hook uses to signal a blocking error (stderr → model). */
 const BLOCKING_EXIT_CODE = 2
@@ -51,16 +51,22 @@ function permissionDecisionOf(value: string | undefined): HookOutput['decision']
  * event-scoped fields; top-level fields and the claimed discriminator remain.
  * Omitting the guard applies the block as-is.
  * @param exitCode - process exit, or `undefined` when spawn failed.
- * @param stdout - output parsed as structured JSON only on exit 0.
+ * @param stdout - output parsed as structured JSON only on exit 0, and never when `fault` reports it truncated.
  * @param stderr - the captured stderr stream; becomes the blocking `reason` on exit 2.
  * @param expectedEventName - firing event used to guard hook-specific fields; omit to disable the guard.
+ * @param fault - the capture defect that makes this run's text absent or incomplete (a truncated stream, or a hook that never started). Present ⇒ the outcome carries {@link HookOutput.unusable}.
  * @returns the dialect-neutral decoded outcome.
  */
-export function parseHookOutput(exitCode: number | undefined, stdout: string, stderr: string, expectedEventName?: string): HookOutput {
+export function parseHookOutput(exitCode: number | undefined, stdout: string, stderr: string, expectedEventName?: string, fault?: HookRunFault): HookOutput {
   const trimmedErr = stderr.trim()
   const trimmedOut = stdout.trim()
   // Plain stdout remains available even when it is not JSON.
-  const output: HookOutput = { exitCode, stderr: trimmedErr, stdout: trimmedOut }
+  const output: HookOutput = {
+    exitCode,
+    stderr: trimmedErr,
+    stdout: trimmedOut,
+    ...fault !== undefined ? { unusable: fault } : {},
+  }
 
   // Both dialects treat exit 2 as a block with stderr as its reason.
   if (exitCode === BLOCKING_EXIT_CODE) {
@@ -68,8 +74,10 @@ export function parseHookOutput(exitCode: number | undefined, stdout: string, st
     if (trimmedErr.length > 0) output.reason = trimmedErr
   }
 
-  // Structured stdout is valid only for a clean exit.
-  if (exitCode === 0) {
+  // Structured stdout is valid only for a clean exit whose capture was complete:
+  // a cut-off body can still parse by accident, and either way it is a fragment
+  // of what the hook said, so nothing in it may pass as the hook's decision.
+  if (exitCode === 0 && fault?.kind !== 'stdout-truncated') {
     // Only attempt JSON when stdout looks like a JSON object — matches the
     // reference engines, which treat other stdout as plain text, not an error.
     if (trimmedOut.startsWith('{')) {

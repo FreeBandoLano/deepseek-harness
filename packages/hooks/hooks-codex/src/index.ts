@@ -148,13 +148,17 @@ export function apply(ctx: Context, config: Config): void {
           expectedEventName: point,
         }, () => performance.now())
         // Clean plain stdout becomes context only when no structured context
-        // exists; nonzero output and raw JSON never leak as prose.
+        // exists; nonzero output and raw JSON never leak as prose — and a
+        // TRUNCATED stdout is a prefix, so half a sentence is not context either.
         if (opts.plainStdoutAsContext === true && output.exitCode === 0
-          && output.additionalContext === undefined
+          && output.additionalContext === undefined && output.unusable === undefined
           && output.stdout.length > 0 && !output.stdout.startsWith('{')) {
           output.additionalContext = output.stdout
         }
         outputs.push(output)
+        if (output.unusable !== undefined) {
+          ctx.logger.warn(`hooks-codex: ${point} hook "${hook.command}" produced no usable outcome (${output.unusable.kind}): ${output.unusable.detail}`)
+        }
         // Execution and decision mapping remain in each bridge so dialect
         // differences stay explicit at their owning extension point.
         /* jscpd:ignore-start */
@@ -171,9 +175,24 @@ export function apply(ctx: Context, config: Config): void {
 
   // TODO(hook-continue-false): `merged.stop` is logged but needs a run-level halt mechanism.
 
-  function contextFrom(merged: MergedHookOutcome): UserMessage | undefined {
-    if (merged.additionalContext.length === 0) return undefined
-    const content: ContentBlock[] = merged.additionalContext.map(text => ({ type: 'text', text }))
+  /**
+   * Build the model context a hook point contributes: every hook's
+   * `additionalContext`, and — first, so it is not buried under a large payload —
+   * a notice for every hook that produced nothing usable (see
+   * {@link HookOutput.unusable}). Failing open is the contract; failing silently
+   * is the defect.
+   */
+  function contextFrom(point: string, merged: MergedHookOutcome): UserMessage | undefined {
+    const content: ContentBlock[] = []
+    if (merged.failures.length > 0) {
+      content.push({
+        type: 'text',
+        text: `[hook failure] ${point} hook(s) produced no usable outcome, so any context they carried was NOT delivered:\n`
+          + merged.failures.map(failure => `- ${failure}`).join('\n'),
+      })
+    }
+    for (const text of merged.additionalContext) content.push({ type: 'text', text })
+    if (content.length === 0) return undefined
     return createUserMessage({ content, source: PLUGIN_SOURCE })
   }
 
@@ -188,7 +207,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('agent/session-start', ({ agent, source }) => {
     detached.track(runPoint('SessionStart', source, { ...base(ctx, agent, 'SessionStart', model), source }, { agent, plainStdoutAsContext: true, signal: detached.signal })
       .then((merged) => {
-        const context = contextFrom(merged)
+        const context = contextFrom('SessionStart', merged)
         if (context) agent.inject(context)
       })
       .catch((error: unknown) => { ctx.logger.warn(`hooks-codex: SessionStart hook failed: ${String(error)}`) }))
@@ -213,7 +232,7 @@ export function apply(ctx: Context, config: Config): void {
     // Context alone is not a veto: DELEGATE so a later pre-step listener can
     // still reject/rewrite, then fold our context onto its decision.
     const downstream = await next()
-    const ours = contextFrom(merged)
+    const ours = contextFrom('UserPromptSubmit', merged)
     if (!ours || downstream.kind !== 'enter') return downstream
     return {
       kind: 'enter',
@@ -235,7 +254,7 @@ export function apply(ctx: Context, config: Config): void {
     const turn = lastTurn(exec.agent)
     /* jscpd:ignore-start */
     const merged = await runPoint('PostToolUse', exec.name, postToolPayload(ctx, exec, result, model), { ...exec.agent ? { agent: exec.agent } : {}, turn, signal: exec.signal })
-    const context = contextFrom(merged)
+    const context = contextFrom('PostToolUse', merged)
     if (merged.decision === 'deny') {
       return { kind: 'block', feedback: [{ type: 'text', text: merged.reason ?? 'blocked by PostToolUse hook' }], ...context ? { additionalContexts: [context] } : {} }
     }

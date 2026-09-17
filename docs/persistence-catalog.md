@@ -458,8 +458,10 @@ Source: [`packages/hooks/hook-protocol/src/types.ts:19`](../packages/hooks/hook-
 ```ts persistence-catalog
 /**
  * Log-only outcome paired to `hook/invoked` by `handlerId`. Decision is the
- * parsed permission result, `stop` for `continue:false`, or `pass`; exit code
- * may be absent, stderr is bounded, and duration is wall-clock runtime.
+ * parsed permission result, `stop` for `continue:false`, `unavailable` when
+ * the run produced no trustworthy outcome (see {@link HookOutput.unusable}),
+ * else `pass`; exit code may be absent, stderr is bounded, the fault rides in
+ * `failure`, and duration is wall-clock runtime.
  */
 'hook/result': {
   turn: number
@@ -468,11 +470,17 @@ Source: [`packages/hooks/hook-protocol/src/types.ts:19`](../packages/hooks/hook-
   decision: string
   exitCode?: number
   stderrSummary?: string
+  /**
+   * `<kind>: <detail>` when the run was unusable — the hook never started, or
+   * a captured stream was cut at the executor's byte cap. Pairs with
+   * `decision: 'unavailable'` and is bounded like `stderrSummary`.
+   */
+  failure?: string
   durationMs: number
 }
 ```
 
-Source: [`packages/hooks/hook-protocol/src/types.ts:31`](../packages/hooks/hook-protocol/src/types.ts)
+Source: [`packages/hooks/hook-protocol/src/types.ts:33`](../packages/hooks/hook-protocol/src/types.ts)
 
 ### `llm/*`
 

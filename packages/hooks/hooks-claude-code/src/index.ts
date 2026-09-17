@@ -172,6 +172,11 @@ export function apply(ctx: Context, config: Config): void {
           expectedEventName: point,
         }, () => performance.now())
         outputs.push(output)
+        if (output.unusable !== undefined) {
+          // Fail open, never silently: the log names the hook and the fault; the
+          // merged notice below says it where the context was going.
+          ctx.logger.warn(`hooks-claude-code: ${point} hook "${hook.command}" produced no usable outcome (${output.unusable.kind}): ${output.unusable.detail}`)
+        }
         if (output.updatedInput !== undefined) {
           ctx.logger.warn(`hooks-claude-code: ${point} hook requested updatedInput, which is not yet honored (ignored)`)
         }
@@ -188,10 +193,25 @@ export function apply(ctx: Context, config: Config): void {
 
   // TODO(hook-continue-false): `merged.stop` is logged but needs a run-level halt mechanism.
 
-  /** Build additional model context from hook output, or return undefined when empty. */
-  function contextFrom(merged: MergedHookOutcome): UserMessage | undefined {
-    if (merged.additionalContext.length === 0) return undefined
-    const content: ContentBlock[] = merged.additionalContext.map(text => ({ type: 'text', text }))
+  /**
+   * Build the model context a hook point contributes: every hook's
+   * `additionalContext`, and — first, so it is not buried under a large payload —
+   * a notice for every hook that produced nothing usable. A hook that could not
+   * run fails OPEN (the turn proceeds); this is what keeps that from being
+   * SILENT, because the one thing worse than a hook that did not deliver is a
+   * session that believes it did.
+   */
+  function contextFrom(point: string, merged: MergedHookOutcome): UserMessage | undefined {
+    const content: ContentBlock[] = []
+    if (merged.failures.length > 0) {
+      content.push({
+        type: 'text',
+        text: `[hook failure] ${point} hook(s) produced no usable outcome, so any context they carried was NOT delivered:\n`
+          + merged.failures.map(failure => `- ${failure}`).join('\n'),
+      })
+    }
+    for (const text of merged.additionalContext) content.push({ type: 'text', text })
+    if (content.length === 0) return undefined
     return createUserMessage({ content, source: PLUGIN_SOURCE })
   }
 
@@ -206,7 +226,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('agent/session-start', ({ agent, source }) => {
     detached.track(runPoint('SessionStart', source, sessionStartPayload(ctx, agent, source), { agent, signal: detached.signal })
       .then((merged) => {
-        const context = contextFrom(merged)
+        const context = contextFrom('SessionStart', merged)
         if (context) agent.inject(context)
       })
       .catch((error: unknown) => {
@@ -226,7 +246,7 @@ export function apply(ctx: Context, config: Config): void {
     // Delegate so later listeners may still rewrite or reject, then prepend our
     // context only to a downstream enter decision.
     const downstream = await next()
-    const ours = contextFrom(merged)
+    const ours = contextFrom('UserPromptSubmit', merged)
     if (!ours || downstream.kind !== 'enter') return downstream
     return {
       kind: 'enter',
@@ -247,7 +267,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
     const turn = lastTurn(exec.agent)
     const merged = await runPoint('PostToolUse', exec.name, postToolPayload(ctx, exec, result), { ...exec.agent ? { agent: exec.agent } : {}, turn, signal: exec.signal })
-    const context = contextFrom(merged)
+    const context = contextFrom('PostToolUse', merged)
     if (merged.decision === 'deny') {
       return { kind: 'block', feedback: [{ type: 'text', text: merged.reason ?? 'blocked by PostToolUse hook' }], ...context ? { additionalContexts: [context] } : {} }
     }
@@ -283,7 +303,7 @@ export function apply(ctx: Context, config: Config): void {
     if (child !== undefined) subagentChildren.set(info.runId, child)
     detached.track(runPoint('SubagentStart', SUBAGENT_TYPE, subagentPayload(ctx, 'SubagentStart', info, child), { ...child ? { agent: child } : {}, signal: detached.signal })
       .then((merged) => {
-        const context = contextFrom(merged)
+        const context = contextFrom('SubagentStart', merged)
         if (context && child) child.inject(context)
       })
       .catch((error: unknown) => { ctx.logger.warn(`hooks-claude-code: SubagentStart hook failed: ${String(error)}`) }))

@@ -7,14 +7,22 @@
  * fact with its own probe evidence, and a declaration about it would be a
  * second, drifting copy of it in the wrong place.
  *
- * THE THREE PROTOCOLS THE PINNED DEPENDENCY SERVES ARE NOT EQUIVALENT, and the
- * difference is per VALUE, not per protocol. `openai-completions` and
- * `openai-responses` write `options.toolChoice` into the body verbatim
- * (`openai-completions.js:557`, `openai-responses.js:225`). `anthropic-messages`
- * speaks a different vocabulary — `"auto" | "any" | "none" | {type:'tool',…}` —
- * so it carries `auto` and `none` and CANNOT carry `required` or the named
- * form: handed our `'required'` it writes `{type:"required"}`, a malformed body
- * that comes back as a 400 from a paid endpoint far from its cause.
+ * ONLY ONE PROTOCOL CARRIES A CHOICE THROUGH THE ENTRY DSH CALLS. Every protocol's
+ * `streamSimple` builds its stream options from `buildBaseOptions`, which does
+ * not copy `toolChoice` (`dist/api/simple-options.js:10-28`); `openai-completions`
+ * re-adds the field explicitly and the other two do not, so `openai-responses`
+ * and `anthropic-messages` never hand it to their request builders at all. That
+ * is why both declare `carries: []` in the table below, and why a choice on
+ * either route is refused rather than dropped in silence.
+ *
+ * The vocabulary differences those unreachable builders DO have are real and
+ * untranslated — `anthropic-messages.js:789-796` wraps a string as
+ * `{type:<value>}` and passes an object through, so our `'required'` would
+ * become the malformed `{type:"required"}` its own vocabulary never names, and
+ * its named form is `{type:'tool', name}` where the Responses one is flat — but
+ * they sit DOWNSTREAM of the arrival gap and cannot be measured here until a
+ * delivery path the simple entry forwards exists. See
+ * `~/.dsh/reports/upstream-simple-entry-tool-choice.md`.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -116,17 +124,19 @@ describe('tool-choice capability', () => {
     expect(failureOf(result.finish)?.code).toBe('TOOL_CHOICE_UNMET')
   })
 
-  it('carries a value the protocol does have, on the route that refuses another', async () => {
-    // The capability is per VALUE. `anthropic-messages` carries `auto`, so the
-    // same route that refuses `required` must not refuse this — a per-protocol
-    // boolean would fail this case, and a per-value table is what keeps a
-    // legitimate declaration from being rejected for its neighbour's reason.
+  it('refuses every kind on a protocol the simple entry does not feed', async () => {
+    // The refusal is per PROTOCOL here, not only per value: on `anthropic-messages`
+    // the field never arrives at all, so the two kinds this route was believed to
+    // share with our vocabulary are refused exactly like the two it never had.
+    // Before the arrival gap was measured this case asserted the opposite — that
+    // `auto` and `none` RESOLVED here — which is the drift the table now forbids:
+    // a capability claimed for a mechanism that does not deliver it.
     const ctx = await harness('http://127.0.0.1:1', 'anthropic-messages')
 
-    await expect(ctx.llm.prepareCall({ provider: 'deepseek', model: MODEL, toolChoice: 'auto' }))
-      .resolves.toBeDefined()
-    await expect(ctx.llm.prepareCall({ provider: 'deepseek', model: MODEL, toolChoice: 'none' }))
-      .resolves.toBeDefined()
+    for (const toolChoice of ['none', 'auto', 'required'] as const) {
+      await expect(ctx.llm.prepareCall({ provider: 'deepseek', model: MODEL, toolChoice }))
+        .rejects.toMatchObject({ code: TOOL_CHOICE_UNSUPPORTED_CODE })
+    }
     await expect(ctx.llm.prepareCall({
       provider: 'deepseek',
       model: MODEL,
@@ -135,15 +145,17 @@ describe('tool-choice capability', () => {
   })
 
   it('declares, per protocol, exactly what that implementation forwards', async () => {
-    // Pinned per protocol because the table now decides whether a turn runs at all:
-    // a silent edit to a `carries` list changes behaviour with no other signal, and
-    // the two subtle rows are the ones no other case exercises — Responses carries
-    // `required` but not our named-function shape (its own form is flat), and
-    // Anthropic carries only the two kinds it shares with our vocabulary.
+    // Pinned per protocol because the table decides whether a turn runs at all: a
+    // silent edit to a `carries` list changes behaviour with no other signal. The
+    // two empty rows are the measured truth rather than caution — the simple entry
+    // dsh calls forwards `toolChoice` for `openai-completions` only, so a choice
+    // declared on either other route never reaches its request builder. They are
+    // refused instead of dropped silently, and they carry again only when a
+    // delivery path the simple entry forwards (or the upstream fix) lands.
     const expected = {
       'openai-completions': ['none', 'auto', 'required', 'function'],
-      'openai-responses': ['none', 'auto', 'required'],
-      'anthropic-messages': ['none', 'auto'],
+      'openai-responses': [],
+      'anthropic-messages': [],
     }
     for (const [api, carries] of Object.entries(expected)) {
       const ctx = await harness('http://127.0.0.1:1', api)

@@ -112,34 +112,66 @@ export interface PiAiAuthInjection {
 }
 
 /**
- * pi-ai's simple-stream options plus the tool choice that entry actually reads.
+ * pi-ai's simple-stream options plus the tool choice that entry reads.
  *
- * `streamSimple` forwards `options.toolChoice` into `stream`, which declares
- * the field and writes it to the request body, but the simple entry's own
- * declared options omit it. The adapter calls the simple entry deliberately —
- * it is the entry that maps the Harness reasoning level onto the protocol's
- * effort — so the option is named here and pinned by the adapter spec's
- * assertion on the captured request body rather than by swapping entries.
+ * The simple entry's own declared options omit the field, and — measured, not
+ * assumed — the entry forwards it to the protocol for `openai-completions` ONLY.
+ * Every protocol's simple entry builds its stream options from
+ * `buildBaseOptions`, which does not copy `toolChoice`, and only completions
+ * re-adds it. The adapter calls the simple entry deliberately (it maps the
+ * Harness reasoning level onto the protocol's effort), so the option is named
+ * here and pinned by the adapter spec's assertion on the captured request body —
+ * and {@link TOOL_CHOICE_BY_PROTOCOL} declares it carried only where that
+ * assertion holds.
  */
 type SimpleStreamOptionsWithToolChoice = ModelsSimpleStreamOptions & { toolChoice?: ToolChoice }
 
 /**
- * What each protocol this adapter serves does with a declared tool choice —
- * read from the protocol implementations in the pinned dependency, not from the
- * vendors' documentation:
+ * What each protocol this adapter serves ACTUALLY CARRIES through the entry dsh
+ * calls — read from the pinned dependency, not from its documentation, and that
+ * reading is the whole point of this table. A declaration that outruns the wire
+ * is how an agent looks compelled while nothing was sent.
  *
- *   - `openai-completions.js:557` and `openai-responses.js:225` assign
- *     `params.tool_choice = options.toolChoice` verbatim, so the string forms
- *     arrive as written. The named-function form, though, is the Chat
- *     Completions shape (`{type:'function', function:{name}}`); the Responses
- *     API wants a flat `{type:'function', name}`, so that one kind is NOT
- *     carried there and is refused rather than sent malformed.
- *   - `anthropic-messages.js:789` maps only its own vocabulary
- *     (`"auto" | "any" | "none" | {type:'tool',…}`). Handed `'required'` it
- *     writes `{type:"required"}`, and handed our named form it writes that
- *     through unchanged: both are malformed bodies that come back as a 400 from
- *     a paid endpoint, far from their cause. Its `any` is its own spelling of
- *     "compel", so carrying it is a translation this adapter does not do.
+ * THE SIMPLE ENTRY FORWARDS A TOOL CHOICE FOR ONE PROTOCOL ONLY. dsh calls
+ * `streamSimple` deliberately (it is the entry that maps the Harness reasoning
+ * level onto the protocol's effort), and each protocol's simple entry builds its
+ * stream options from `buildBaseOptions`, which copies sixteen fields and NOT
+ * `toolChoice` (`dist/api/simple-options.js:10-28`: zero occurrences):
+ *
+ *   - `openai-completions` re-adds it explicitly — `const toolChoice =
+ *     options?.toolChoice`, spread alongside `reasoningEffort` — so all four
+ *     kinds reach the request builder, which assigns them verbatim
+ *     (`openai-completions.js:558`).
+ *   - `openai-responses` returns `{ ...base, reasoningEffort }` and
+ *     `anthropic-messages` returns `{ ...base, thinkingEnabled, … }`: neither
+ *     re-adds the field, so NOTHING arrives and their builders' own
+ *     `tool_choice` assignments (`openai-responses.js:224-226`,
+ *     `anthropic-messages.js:789-796`) are never reached. The vocabulary
+ *     differences those builders do have — Anthropic's `any` for "compel", its
+ *     `{type:'tool', name}` named form, the flat named form on Responses — are
+ *     real and untranslated, but they are DOWNSTREAM of this gap, not the gap.
+ *
+ * This is a LIMIT OF THE SEAM, NOT OF THE PROTOCOLS: all three protocols' full
+ * `stream` entry carries the field and writes it (the builders cited above), and
+ * this adapter's provider delegates that entry at `provider.ts:156`. dsh calls
+ * the simple entry deliberately — it is the entry that maps the Harness reasoning
+ * level onto the protocol's effort — and #11 settled that the entry is not swapped
+ * to get a tool choice through. So what is missing is a way to REACH these
+ * protocols with a choice, not the ability to express one: the fix belongs in what
+ * the simple entry forwards.
+ *
+ * So both rows carry nothing, which is the same honest claim the DeepSeek adapter
+ * makes for its own request builder: reached the way dsh reaches it, this
+ * implementation forwards nothing. A choice declared on such a route is REFUSED,
+ * not dropped in silence.
+ *
+ * They carry again — in either order — only by delivering the choice through an
+ * option the simple entry DOES forward (`onPayload` is copied by
+ * `buildBaseOptions` and applied by all three protocols), or by landing the
+ * upstream fix that gives `buildSimpleOptions` the field (drafted in
+ * `~/.dsh/reports/upstream-simple-entry-tool-choice.md`). Widen these lists only
+ * to exactly what the delivery path that lands actually puts on the wire: the
+ * declaration is a claim about the wire, and the wire is what a test must read.
  *
  * A protocol absent from this table resolves to `undefined`, which the runtime
  * treats as UNKNOWN — warned about and forwarded unchecked, never refused.
@@ -151,11 +183,11 @@ const TOOL_CHOICE_BY_PROTOCOL: Readonly<Record<string, ToolChoiceSupport>> = {
   },
   'openai-responses': {
     protocol: 'openai-responses',
-    carries: ['none', 'auto', 'required'],
+    carries: [],
   },
   'anthropic-messages': {
     protocol: 'anthropic-messages',
-    carries: ['none', 'auto'],
+    carries: [],
   },
 }
 
